@@ -1,0 +1,13 @@
+[Unit]
+Description=drone_control — Ground Control role (all GC-side services)
+Documentation=file:///root/ros2_ws/src/drone_control/BUILDSPEC.md
+Wants=drone-control-state-bridge-drone-01.service
+Wants=drone-control-state-bridge-drone-02.service
+Wants=drone-control-gc-radio-health-reader.service
+Wants=drone-control-gc-link-observer.service
+Wants=drone-control-relay-decision-authority.service
+Wants=drone-control-chain-assigner.service
+After=network-online.target
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,23 @@
+[Unit]
+Description=drone_control — relay_mover (follower; streams setpoints to px4-agent for OFFBOARD flight)
+Documentation=file:///root/ros2_ws/src/drone_control/BUILDSPEC.md
+# Depends on px4-agent (setpoint MQTT sink) and relay_position_tracker (arrival state).
+After=network-online.target px4-agent.service drone-control-relay-position-tracker.service
+Wants=network-online.target px4-agent.service
+PartOf=drone-control-follower.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/ros2_ws
+EnvironmentFile=/etc/default/drone-control
+Environment=DRONE_ID=drone-02
+# PX4_RX_URL points px4_agent's read path at the PX4 SITL's secondary MAVLink output.
+# On real device, adjust to a spare MAVLink UDP output configured in PX4 params.
+Environment=PX4_RX_URL=udpin:0.0.0.0:14558
+ExecStart=/usr/local/bin/drone-control-run relay_mover
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=drone-control-follower.target

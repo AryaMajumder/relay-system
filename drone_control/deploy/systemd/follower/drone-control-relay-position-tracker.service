@@ -1,0 +1,21 @@
+[Unit]
+Description=drone_control — relay_position_tracker (follower; detects arrival, publishes relay_confirmed + RELAYING role)
+Documentation=file:///root/ros2_ws/src/drone_control/BUILDSPEC.md
+# Requires px4-agent to be publishing drone_state (position source).
+# Real device: px4-agent.service.  SITL co-hosted: px4-agent-drone-02.service.
+After=network-online.target px4-agent.service drone-control-capability-assessor.service
+Wants=network-online.target px4-agent.service
+PartOf=drone-control-follower.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/ros2_ws
+EnvironmentFile=/etc/default/drone-control
+Environment=DRONE_ID=drone-02
+ExecStart=/usr/local/bin/drone-control-run relay_position_tracker
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=drone-control-follower.target

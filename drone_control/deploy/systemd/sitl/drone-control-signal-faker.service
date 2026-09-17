@@ -1,0 +1,21 @@
+[Unit]
+Description=drone_control — signal_faker (SITL ONLY; FSPL radio simulator)
+Documentation=file:///root/ros2_ws/src/drone_control/BUILDSPEC.md#4.1
+# SITL-only.  Do NOT enable on real fleet — real radios provide signal data via
+# MAVLink telemetry, not this simulator.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/ros2_ws
+EnvironmentFile=/etc/default/drone-control
+# DRONE_ID=gc makes signal_faker publish for the full follower set (drone-01, drone-02).
+Environment=DRONE_ID=gc
+ExecStart=/usr/local/bin/drone-control-run signal_faker
+Restart=always
+RestartSec=5
+
+# Deliberately no [Install] section — this unit is NOT WantedBy any target.
+# Enable manually on SITL rigs:  systemctl enable --now drone-control-signal-faker

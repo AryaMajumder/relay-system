@@ -1,0 +1,20 @@
+[Unit]
+Description=drone_control — relay_decision_authority (GC authority; single fleet-wide instance)
+Documentation=file:///root/ros2_ws/src/drone_control/BUILDSPEC.md#4.10
+After=network-online.target
+Wants=network-online.target
+PartOf=drone-control-gc.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/ros2_ws
+EnvironmentFile=/etc/default/drone-control
+Environment=LEADER_ID=drone-01
+Environment=FOLLOWER_IDS=drone-02
+ExecStart=/usr/local/bin/drone-control-run relay_decision_authority
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=drone-control-gc.target

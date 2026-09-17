@@ -1,0 +1,21 @@
+[Unit]
+Description=drone_control — gc_radio_health_reader (GC; per-follower link health)
+Documentation=file:///root/ros2_ws/src/drone_control/BUILDSPEC.md#4.2
+After=network-online.target
+Wants=network-online.target
+PartOf=drone-control-gc.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/ros2_ws
+EnvironmentFile=/etc/default/drone-control
+# FOLLOWER_IDS is a comma-separated list — one reader instance handles all followers.
+Environment=DRONE_ID=gc
+Environment=FOLLOWER_IDS=drone-02
+ExecStart=/usr/local/bin/drone-control-run gc_radio_health_reader
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=drone-control-gc.target

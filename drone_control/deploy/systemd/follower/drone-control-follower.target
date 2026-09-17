@@ -1,0 +1,14 @@
+[Unit]
+Description=drone_control — Follower role (deploys to drone-02)
+Documentation=file:///root/ros2_ws/src/drone_control/BUILDSPEC.md
+Wants=drone-control-follower-radio-health-reader.service
+Wants=drone-control-capability-assessor.service
+Wants=drone-control-relay-strategy-evaluator.service
+Wants=drone-control-strategy-executor.service
+Wants=drone-control-relay-position-tracker.service
+Wants=drone-control-relay-mover.service
+Wants=drone-control-continuous-monitor.service
+After=network-online.target
+
+[Install]
+WantedBy=multi-user.target

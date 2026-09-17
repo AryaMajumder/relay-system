@@ -1,0 +1,22 @@
+#!/bin/bash
+# drone-control-run — systemd exec wrapper for drone_control ROS 2 nodes.
+#
+# Systemd starts processes with a bare environment; ROS 2 needs ~10 env vars
+# established by sourcing the two setup.bash files below.  This wrapper sources
+# them, then execs the requested entry point.
+#
+# Usage:  drone-control-run <entry-point>       e.g. drone-control-run capability_assessor
+#
+# All env vars set by the calling systemd unit (DRONE_ID, LEADER_ID,
+# FOLLOWER_IDS, MQTT_PASS, etc.) pass through to the ros2 process.
+
+set -e
+
+# Base ROS 2 install (rclpy, DDS, ros2 CLI).
+source /opt/ros/humble/setup.bash
+
+# Workspace overlay (drone_control entry points).  Re-source after every
+# colcon build; the underlying files change but this script does not.
+source /root/ros2_ws/install/setup.bash
+
+exec ros2 run drone_control "$@"

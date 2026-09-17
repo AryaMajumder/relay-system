@@ -1,0 +1,9 @@
+[Unit]
+Description=drone_control — Leader role (deploys to drone-01)
+Documentation=file:///root/ros2_ws/src/drone_control/BUILDSPEC.md
+Wants=drone-control-leader-radio-health-reader.service
+Wants=drone-control-leader-link-detector.service
+After=network-online.target
+
+[Install]
+WantedBy=multi-user.target

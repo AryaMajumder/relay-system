@@ -1,0 +1,22 @@
+[Unit]
+Description=drone_control — state_bridge for drone-01 (MQTT drone_state -> ROS)
+Documentation=file:///root/ros2_ws/src/drone_control/BUILDSPEC.md
+# Adjust After= to the mosquitto instance serving drone-01's broker.
+# Real deployment: mosquitto.service
+# SITL co-hosted: mosquitto-drone01.service
+After=network-online.target mosquitto.service
+Wants=network-online.target
+PartOf=drone-control-gc.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/ros2_ws
+EnvironmentFile=/etc/default/drone-control
+Environment=DRONE_ID=drone-01
+ExecStart=/usr/local/bin/drone-control-run state_bridge
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=drone-control-gc.target

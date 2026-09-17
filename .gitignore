@@ -1,0 +1,25 @@
+# colcon
+build/
+install/
+log/
+
+# python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+*.egg-info/
+
+# editors
+.vscode/
+.idea/
+*.swp
+
+# state
+*.db
+*.sqlite
+/tmp/
+
+# local overrides
+.env
+*.local

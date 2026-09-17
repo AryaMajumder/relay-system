@@ -1,0 +1,20 @@
+[Unit]
+Description=drone_control — capability_assessor (follower; hosts the relay BT at 0.5 Hz)
+Documentation=file:///root/ros2_ws/src/drone_control/BUILDSPEC.md#4.11
+After=network-online.target drone-control-follower-radio-health-reader.service
+Wants=network-online.target
+PartOf=drone-control-follower.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/ros2_ws
+EnvironmentFile=/etc/default/drone-control
+Environment=DRONE_ID=drone-02
+Environment=LEADER_ID=drone-01
+ExecStart=/usr/local/bin/drone-control-run capability_assessor
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=drone-control-follower.target

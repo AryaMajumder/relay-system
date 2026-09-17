@@ -1,0 +1,19 @@
+[Unit]
+Description=drone_control — leader_link_detector (leader drone; publishes relay_request when link degraded)
+Documentation=file:///root/ros2_ws/src/drone_control/BUILDSPEC.md#4.4
+After=network-online.target drone-control-leader-radio-health-reader.service
+Wants=network-online.target
+PartOf=drone-control-leader.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/ros2_ws
+EnvironmentFile=/etc/default/drone-control
+Environment=DRONE_ID=drone-01
+ExecStart=/usr/local/bin/drone-control-run leader_link_detector
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=drone-control-leader.target

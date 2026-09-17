@@ -1,0 +1,19 @@
+[Unit]
+Description=drone_control — gc_link_observer (GC; observes leader-GC link SNR)
+Documentation=file:///root/ros2_ws/src/drone_control/BUILDSPEC.md#4.3
+After=network-online.target
+Wants=network-online.target
+PartOf=drone-control-gc.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/ros2_ws
+EnvironmentFile=/etc/default/drone-control
+Environment=LEADER_ID=drone-01
+ExecStart=/usr/local/bin/drone-control-run gc_link_observer
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=drone-control-gc.target

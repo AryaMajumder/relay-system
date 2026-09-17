@@ -1,0 +1,42 @@
+[Unit]
+Description=PX4 Companion Agent - drone-02 (MQTT -> MAVLink)
+After=network.target mosquitto-drone02.service
+Wants=mosquitto-drone02.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/drone-command
+ExecStart=/opt/drone-command/venv/bin/python /opt/drone-command/px4_agent.py
+Restart=always
+RestartSec=5
+
+# ── Identity ──────────────────────────────────────────────────────────────────
+Environment=DRONE_ID=drone-02
+
+# ── MQTT (same broker, shared with drone-01) ──────────────────────────────────
+Environment=MQTT_HOST=127.0.0.1
+Environment=MQTT_PORT=1885
+
+# ── MAVLink (different UDP port from drone-01) ────────────────────────────────
+# PX4 drone-02 listens on 15100/15102, sends on 15101/15103
+# px4_agent sends commands to 15102, receives replies on ephemeral port
+# Separate listener on 15103 for telemetry
+Environment=PX4_URL=udpout:127.0.0.1:18571
+Environment=PX4_RX_URL=
+
+# ── Persistent state (separate DB from drone-01) ──────────────────────────────
+Environment=DB_PATH=/var/lib/px4_agent/agent-02.db
+
+# ── Tuning ────────────────────────────────────────────────────────────────────
+Environment=HEARTBEAT_TIMEOUT=10
+Environment=LOG_LEVEL=INFO
+Environment=ENABLE_CLOUD_LINK_CHECK=false
+Environment=SETPOINT_STALE_S=3.0
+
+# Security
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

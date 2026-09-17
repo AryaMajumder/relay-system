@@ -1,0 +1,17 @@
+[Unit]
+Description=Mosquitto MQTT Broker — drone-02 (port 1885)
+After=network.target mqtt-ssh-tunnel.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mosquitto
+Group=mosquitto
+ExecStart=/usr/sbin/mosquitto -c /etc/mosquitto/mosquitto-drone02.conf
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

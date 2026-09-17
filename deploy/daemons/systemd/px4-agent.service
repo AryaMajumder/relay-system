@@ -1,0 +1,20 @@
+[Unit]
+Description=PX4 Companion Agent (MQTT -> MAVLink)
+After=network.target mosquitto-drone01.service
+
+[Service]
+User=root
+ExecStart=/opt/drone-command/venv/bin/python /opt/drone-command/px4_agent.py
+Restart=always
+RestartSec=5
+Environment=DRONE_ID=drone-01
+Environment=MQTT_HOST=127.0.0.1
+Environment=MQTT_PORT=1884
+Environment=PX4_URL=udpin:0.0.0.0:14556
+Environment=DB_PATH=/var/lib/px4_agent/agent.db
+Environment=HEARTBEAT_TIMEOUT=10
+Environment=LOG_LEVEL=INFO
+Environment=ENABLE_CLOUD_LINK_CHECK=false
+Environment=SETPOINT_STALE_S=3.0
+[Install]
+WantedBy=multi-user.target
