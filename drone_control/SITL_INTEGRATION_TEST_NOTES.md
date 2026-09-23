@@ -26,7 +26,7 @@ capability_assessor  (BT tick at 0.5 Hz)
 relay_mover / relay_position_tracker / strategy_executor / …
 ```
 
-The Behavior Tree (BT) inside `capability_assessor` decides whether the follower is capable of relaying and, once in `RELAYING_BRANCH`, runs a maintenance arbiter that gates continued relay on nine conditions (G1–G9).
+The Behavior Tree (BT) inside `capability_assessor` decides whether the follower is capable of relaying and, once in `RELAYING_BRANCH`, runs two steps every tick: a `DIAG_SCAN` that unconditionally evaluates G8 (authorization validity) and G9 (GPS health), followed by an `ARBITER_SCAN` priority Selector that gates continued relay on G1–G7 plus a reauth-timeout check.
 
 ---
 

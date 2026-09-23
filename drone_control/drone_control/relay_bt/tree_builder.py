@@ -12,7 +12,11 @@ Root Selector dispatches on role (RELAYING vs IDLE):
   ├── RELAYING_BRANCH [Sequence]        gated IsAlreadyRelaying
   │     ├── IsAlreadyRelaying
   │     ├── BandSensorNode              maintains R_target every maintenance tick
-  │     └── ARBITER_SCAN [Selector]     priority scan, gates 1-9 + reauth timeout
+  │     ├── DIAG_SCAN [Selector]        unconditional diagnostics — always runs G8+G9, always succeeds
+  │     │     ├── Seq(RelayActuallyImproved, AlwaysFail)  writes reauth_requested_at on FAIL
+  │     │     ├── Seq(GpsHealthy, AlwaysFail)             writes gps_health_advisory
+  │     │     └── AlwaysSucceed                           terminal — makes DIAG_SCAN return SUCCESS
+  │     └── ARBITER_SCAN [Selector]     priority scan, gates 1-7 + reauth timeout
   │           ├── G1  Seq(Inv(FcuTelemetryFresh),             FollowerSafetyExit)
   │           ├── G2  Seq(Inv(BatteryStillSufficientToRelay), FollowerSafetyExit)
   │           ├── G3  Seq(Inv(OffboardModeHeld),              FollowerSafetyExit)
@@ -23,9 +27,7 @@ Root Selector dispatches on role (RELAYING vs IDLE):
   │           │         G7_HANDLER [Selector]
   │           │           ├── Seq(DriftedFromBand, ProposeReposition)
   │           │           └── ProposeExitRelay
-  │           ├── G8  Seq(RelayActuallyImproved, AlwaysFail)  writes reauth_requested_at on FAIL
   │           ├── REAUTH_TIMEOUT  Seq(Inv(ReauthResponseTimedOut), ProposeExitRelay)
-  │           ├── G9  Seq(GpsHealthy, AlwaysFail)             diagnostic only
   │           └── CONTINUE  AlwaysSucceed                     all gates passed
   └── IDLE_BRANCH [Sequence]            gated NotAlreadyRelaying
         ├── NotAlreadyRelaying
@@ -165,6 +167,22 @@ def build_relay_decision_tree(bb: TimestampedBlackboard,
         _n(ProposeExitRelay, name="ProposeExitRelay(G7)"),
     )
 
+    # DIAG_SCAN: G8 and G9 run unconditionally every tick, independent of ARBITER_SCAN.
+    # Each Seq(node, AlwaysFail) always returns FAILURE so the Selector never short-circuits
+    # before the second node. AlwaysSucceed as the terminal child makes DIAG_SCAN always
+    # return SUCCESS so RELAYING_BRANCH's outer Sequence continues to ARBITER_SCAN.
+    diag_scan = _sel("DIAG_SCAN",
+        _seq("G8_AUTH",
+             _n(RelayActuallyImproved),
+             _fail("G8_AlwaysFail"),
+        ),
+        _seq("G9_DIAG",
+             _n(GpsHealthy),
+             _fail("G9_AlwaysFail"),
+        ),
+        _succeed("DIAG_CONTINUE"),
+    )
+
     arbiter_scan = _sel("ARBITER_SCAN",
         # G1: FCU telemetry fresh (forced-safety, no debounce)
         _seq("G1_FCU",
@@ -201,22 +219,10 @@ def build_relay_decision_tree(bb: TimestampedBlackboard,
              _inv(_n(RelayLinkAdequate)),
              g7_handler,
         ),
-        # G8: authorization position+timer still valid.
-        # Diagnostic-style (Seq with AlwaysFail ensures scan always continues),
-        # but RelayActuallyImproved writes reauth_requested_at on FAIL as a side effect.
-        _seq("G8_AUTH",
-             _n(RelayActuallyImproved),
-             _fail("G8_AlwaysFail"),
-        ),
         # REAUTH_TIMEOUT: if reauth request timed out → ProposeExitRelay
         _seq("REAUTH_TIMEOUT",
              _inv(_n(ReauthResponseTimedOut)),
              _n(ProposeExitRelay, name="ProposeExitRelay(ReauthTimeout)"),
-        ),
-        # G9: GPS health — diagnostic only, never blocks scan
-        _seq("G9_DIAG",
-             _n(GpsHealthy),
-             _fail("G9_AlwaysFail"),
         ),
         # All gates passed — continue relaying
         _succeed("CONTINUE"),
@@ -225,6 +231,7 @@ def build_relay_decision_tree(bb: TimestampedBlackboard,
     relaying_branch = _seq("RELAYING_BRANCH",
         _n(IsAlreadyRelaying),
         _n(BandSensorNode, name="BandSensorNode(relay)"),
+        diag_scan,
         arbiter_scan,
     )
 

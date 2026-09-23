@@ -472,12 +472,15 @@ def scenario_b(results):
         "leader_to_follower": pipe["flw_health"].get("leader_to_follower") or {"snr_db": 22.0},
         "timestamp": now,
     })
+    bb.set("follower_severity",                  0.3)
+    bb.set("follower_snr_db_gc_to_follower",     25.0)
+    bb.set("follower_snr_db_leader_to_follower", 22.0)
 
     core = _AssessorCore(bb, CFG, clock)
 
     # Simulate relay_assignment arriving (§6 BB keys + quality sub start).
     core.apply_relay_assignment({
-        "relay_target": RELAY_POS,
+        "r_target": RELAY_POS,
         "tolerance_radius_m": 10.0,
         "valid_until": now + 300.0,
     })
@@ -535,7 +538,7 @@ def scenario_c(results):
 
     core = _AssessorCore(bb, CFG, clock)
     core.apply_relay_assignment({
-        "relay_target": RELAY_POS,
+        "r_target": RELAY_POS,
         "tolerance_radius_m": 10.0,
         "valid_until": now + 300.0,
     })
@@ -665,13 +668,16 @@ def scenario_e(results):
         "leader_to_follower": pipe["flw_health"].get("leader_to_follower") or {"snr_db": 22.0},
         "timestamp": now,
     })
+    bb.set("follower_severity",                  0.3)
+    bb.set("follower_snr_db_gc_to_follower",     25.0)
+    bb.set("follower_snr_db_leader_to_follower", 22.0)
     bb.set("authorization_valid_until", now - 5.0)
     _row("authorization_valid_until", f"t={now - 5.0:.0f}s  (5s in the past → G8 FAILS)")
     _row("reauth_response_timeout_s",  f"{CFG['reauth_response_timeout_s']} s")
 
     core = _AssessorCore(bb, CFG, clock)
     core.apply_relay_assignment({
-        "relay_target": RELAY_POS,
+        "r_target": RELAY_POS,
         "tolerance_radius_m": 10.0,
         "valid_until": now - 5.0,
     })
@@ -693,6 +699,9 @@ def scenario_e(results):
         "leader_to_follower": {"snr_db": 22.0},
         "timestamp": now2,
     })
+    bb.set("follower_severity",                  0.3)
+    bb.set("follower_snr_db_gc_to_follower",     25.0)
+    bb.set("follower_snr_db_leader_to_follower", 22.0)
 
     print(f"  │  [clock +130s → t={clock.now():.0f}s  reauth elapsed > {CFG['reauth_response_timeout_s']}s threshold]")
     _wave("5+6", "Tick 2 — ReauthResponseTimedOut fires → EXIT_RELAY drained, sub torn down")

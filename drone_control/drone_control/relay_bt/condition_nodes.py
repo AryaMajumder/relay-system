@@ -7,7 +7,7 @@ SUBSCRIBES: none
 PUBLISHES:  none
 
 Hard rules this file must satisfy (BUILDSPEC §4.6 / §5.5):
-  - Exactly nine maintenance gates, no others
+  - Exactly nine maintenance gates, no others (G8+G9 run in DIAG_SCAN, G1–G7 in ARBITER_SCAN)
     -> proven by test_exactly_nine_gates
   - GCLinkLossAcceptable removed
     -> proven by test_no_loss_gate
@@ -828,18 +828,20 @@ class GpsHealthy(ConditionNodeBase):
 
 # ── Gate registry ─────────────────────────────────────────────────────────────
 
-# BUILDSPEC §4.6: exactly nine maintenance gates, in scan order.
+# BUILDSPEC §4.6: exactly nine maintenance gates, in gate-number order.
+# G1–G7 run in ARBITER_SCAN (priority Selector); G8–G9 run in DIAG_SCAN
+# (unconditional Selector before ARBITER_SCAN) — see tree_builder.py.
 # test_exactly_nine_gates asserts on this list.
 MAINTENANCE_GATES = [
-    FcuTelemetryFresh,           # Gate 1
-    BatteryStillSufficientToRelay,  # Gate 2
-    OffboardModeHeld,            # Gate 3
-    PositionServiceable,         # Gate 4
-    RfLinkTelemetryFresh,        # Gate 5
-    RelayStillNeeded,            # Gate 6
-    RelayLinkAdequate,           # Gate 7
-    RelayActuallyImproved,       # Gate 8
-    GpsHealthy,                  # Gate 9
+    FcuTelemetryFresh,             # Gate 1  — ARBITER_SCAN
+    BatteryStillSufficientToRelay, # Gate 2  — ARBITER_SCAN
+    OffboardModeHeld,              # Gate 3  — ARBITER_SCAN
+    PositionServiceable,           # Gate 4  — ARBITER_SCAN
+    RfLinkTelemetryFresh,          # Gate 5  — ARBITER_SCAN
+    RelayStillNeeded,              # Gate 6  — ARBITER_SCAN
+    RelayLinkAdequate,             # Gate 7  — ARBITER_SCAN
+    RelayActuallyImproved,         # Gate 8  — DIAG_SCAN (unconditional)
+    GpsHealthy,                    # Gate 9  — DIAG_SCAN (unconditional)
 ]
 
 

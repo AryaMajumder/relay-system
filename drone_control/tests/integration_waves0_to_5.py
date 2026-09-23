@@ -384,12 +384,18 @@ def scenario_b(results):
         "leader_to_follower": pipe["flw_health"].get("leader_to_follower") or {"snr_db": 22.0},
         "timestamp": now,
     })
+    # G5 (RfLinkTelemetryFresh) reads follower_severity; G7 (RelayLinkAdequate) reads
+    # follower_snr_db_gc_to_follower and follower_snr_db_leader_to_follower.
+    # These are written by follower_radio_health_reader in the live pipeline;
+    # set them explicitly here so G5 and G7 see fresh, healthy data.
+    bb.set("follower_severity",                   0.3)
+    bb.set("follower_snr_db_gc_to_follower",      25.0)
+    bb.set("follower_snr_db_leader_to_follower",  22.0)
     _row("current_role",           "RELAYING  → RELAYING_BRANCH fires")
     _row("drone_state.battery_pct","60 %  (above return+reserve ~35.6 %)")
     _row("drone_state.flight_mode","OFFBOARD  (G3 passes)")
-    _row("signal_report snr",      f"gc={pipe['flw_health'].get('gc_to_follower', {}).get('snr_db', 25.0):.1f}dB  "
-                                   f"ldr={pipe['flw_health'].get('leader_to_follower', {}).get('snr_db', 22.0):.1f}dB  "
-                                   f"(both ≥ min_snr={CFG['min_snr_db']}dB → G7 passes)")
+    _row("follower_snr",           f"gc=25.0dB  ldr=22.0dB  (both ≥ min_snr={CFG['min_snr_db']}dB → G7 passes)")
+    _row("follower_severity",      "0.3  (fresh → G5 passes)")
     _row("authorization_valid_until","not set  → G8 passes immediately")
     _row("reauth_requested_at",    "not set  → REAUTH_TIMEOUT passes")
 
@@ -438,8 +444,13 @@ def scenario_c(results):
         "leader_to_follower": {"snr_db": 5.0},
         "timestamp": now,
     })
-    _row("signal_report snr",     "gc=3.0dB  ldr=5.0dB  (both < min_snr=8dB)")
-    _row("debounce_n",            f"{CFG['debounce_n']} consecutive bad ticks required before G7 FAILS")
+    # G5 reads follower_severity (must be fresh to pass); G7 reads the per-hop SNR keys.
+    bb.set("follower_severity",                  0.95)
+    bb.set("follower_snr_db_gc_to_follower",     3.0)
+    bb.set("follower_snr_db_leader_to_follower", 5.0)
+    _row("follower_snr",     "gc=3.0dB  ldr=5.0dB  (both < min_snr=8dB → G7 fires after debounce)")
+    _row("follower_severity","0.95  (fresh → G5 passes, G7 debounce runs)")
+    _row("debounce_n",       f"{CFG['debounce_n']} consecutive bad ticks required before G7 FAILS")
 
     _wave(5, "BT tree — 3 ticks with sustained bad SNR  (Wave 5)")
     root = build_relay_decision_tree(bb, CFG, clock=clock.now)
@@ -458,6 +469,9 @@ def scenario_c(results):
             "leader_to_follower": {"snr_db": 5.0},
             "timestamp": now2,
         })
+        bb.set("follower_severity",                  0.95)
+        bb.set("follower_snr_db_gc_to_follower",     3.0)
+        bb.set("follower_snr_db_leader_to_follower", 5.0)
         bt.tick()
         state = dump_state(root)
         g7 = state.get("RelayLinkAdequate", {})
@@ -571,6 +585,9 @@ def scenario_e(results):
         "leader_to_follower": pipe["flw_health"].get("leader_to_follower") or {"snr_db": 22.0},
         "timestamp": now,
     })
+    bb.set("follower_severity",                  0.3)
+    bb.set("follower_snr_db_gc_to_follower",     25.0)
+    bb.set("follower_snr_db_leader_to_follower", 22.0)
     bb.set("authorization_valid_until", now - 5.0)
     _row("authorization_valid_until", f"t={now - 5.0:.0f}s  (5s ago — already expired)")
     _row("reauth_response_timeout_s",  f"{CFG['reauth_response_timeout_s']} s")
@@ -606,6 +623,9 @@ def scenario_e(results):
         "leader_to_follower": {"snr_db": 22.0},
         "timestamp": now2,
     })
+    bb.set("follower_severity",                  0.3)
+    bb.set("follower_snr_db_gc_to_follower",     25.0)
+    bb.set("follower_snr_db_leader_to_follower", 22.0)
 
     print(f"  │  [tick 2 @ t={clock.now():.0f}s]")
     bt.tick()
