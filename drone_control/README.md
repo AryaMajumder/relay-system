@@ -19,16 +19,19 @@ See [`docs/architecture.md`](docs/architecture.md) for the full flow diagram (Me
 
 The follower's behaviour tree has two families of exit gates, and the difference matters:
 
-| Gate | Failure mode | Action | Command result |
-|---|---|---|---|
-| **G1** `FcuTelemetryFresh` | telemetry lost | `FollowerSafetyExit` | **RTL** |
-| **G2** `BatteryStillSufficientToRelay` | low battery | `FollowerSafetyExit` | **RTL** |
-| **G3** `OffboardModeHeld` | OFFBOARD unrecoverable | `FollowerSafetyExit` | **RTL** |
-| **G4** `PositionServiceable` | band no longer feasible | `ProposeExitRelay` | **HOLD in place** |
-| **G5** `RfLinkTelemetryFresh` | RF telemetry stale | `ProposeExitRelay` | **HOLD in place** |
-| **G6** `RelayStillNeeded` | direct link recovered | `ProposeExitRelay` | **HOLD in place** |
+| Gate | Selector | Failure mode | Action | Command result |
+|---|---|---|---|---|
+| **G1** `FcuTelemetryFresh` | ARBITER_SCAN | telemetry lost | `FollowerSafetyExit` | **RTL** |
+| **G2** `BatteryStillSufficientToRelay` | ARBITER_SCAN | low battery | `FollowerSafetyExit` | **RTL** |
+| **G3** `OffboardModeHeld` | ARBITER_SCAN | OFFBOARD unrecoverable | `FollowerSafetyExit` | **RTL** |
+| **G4** `PositionServiceable` | ARBITER_SCAN | band no longer feasible | `ProposeExitRelay` | **HOLD in place** |
+| **G5** `RfLinkTelemetryFresh` | ARBITER_SCAN | RF telemetry stale | `ProposeExitRelay` | **HOLD in place** |
+| **G6** `RelayStillNeeded` | ARBITER_SCAN | direct link recovered | `ProposeExitRelay` | **HOLD in place** |
+| **G7** `RelayLinkAdequate` | ARBITER_SCAN | relay hops degraded | `ProposeReposition` / `ProposeExitRelay` | **reposition or HOLD** |
+| **G8** `RelayActuallyImproved` | DIAG_SCAN | auth stale / relay not improving | writes `reauth_requested_at` | **advisory — never exits** |
+| **G9** `GpsHealthy` | DIAG_SCAN | GPS degraded | GPS alert published | **advisory — never exits** |
 
-G1–G3 are **safety gates** — the drone is physically compromised, get it home. G4–G6 are **viability gates** — the drone is healthy but the *relay task* is no longer useful; hold in place, be ready to re-engage if geometry recovers. Reserving RTL for real safety events keeps battery available for the next mission.
+G1–G3 are **safety gates** — the drone is physically compromised, get it home. G4–G7 are **viability gates** — the drone is healthy but the *relay task* is no longer useful or reachable; hold in place or reposition, let the pipeline re-engage if geometry recovers. G8–G9 are **diagnostic gates** — they run unconditionally every tick in a separate `DIAG_SCAN` step before `ARBITER_SCAN`, so a G1–G7 alarm never suppresses them. Neither G8 nor G9 can exit the relay; their outputs are advisory signals to the GC.
 
 ## Demonstrated behaviour
 
