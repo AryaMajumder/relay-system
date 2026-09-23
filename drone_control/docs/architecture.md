@@ -93,10 +93,11 @@ flowchart TB
         M_link{"7 · RelayLinkAdequate? — RELAY HOPS  PRIMARY<br/>GC↔follower &amp; follower↔leader<br/>SNR ≥ MIN_SNR"}:::follower
         M_driftq{"drifted vs band AND<br/>battery allows reposition?<br/>(band = gc_cap · leader_cap · severity)"}:::follower
         M_repos["ProposeReposition<br/>(only if gain ≥ 5 dB justifies the move)"]:::stay
+        F_diagscan{{"DIAG_SCAN — unconditional<br/>G8 (RelayActuallyImproved) + G9 (GpsHealthy)<br/>run every tick before ARBITER_SCAN<br/>(not gated by G1–G7 outcome)"}}:::gate
         M_eff{"8 · RelayActuallyImproved? — DIAGNOSTIC<br/>relay path ≥ 3 dB / ≥ 10 pp better<br/>than the DIRECT link (baseline)?"}:::follower
-        M_redwarn(["CONTINUE + redundancy advisory<br/>(relay working but maybe unnecessary)"]):::warn
+        M_redwarn(["redundancy advisory<br/>(relay working but maybe unnecessary)"]):::warn
         M_gps{"9 · GPS degraded?"}:::follower
-        M_cont_gps(["CONTINUE + GPS alert"]):::warn
+        M_cont_gps(["GPS alert (advisory)"]):::warn
         M_cont(["CONTINUE"]):::stay
 
         F_rhguard -->|"fresh → live cap + severity"| F_sense
@@ -106,7 +107,10 @@ flowchart TB
         F_sense --> F_root
         F_root -->|"IDLE  (NotAlreadyRelaying ✓)"| F_trig
         F_root -->|"RELAYING  (IsAlreadyRelaying ✓)"| F_gate
-        F_gate -->|"✓ — arbiter reads ALL gate_results at once, applies priority ↓"| M_fcufresh
+        F_gate -->|"✓ → DIAG_SCAN first"| F_diagscan
+        F_diagscan -.->|"G8 always runs (side-effect: reauth if stale)"| M_eff
+        F_diagscan -.->|"G9 always runs (side-effect: alert if degraded)"| M_gps
+        F_diagscan -->|"always SUCCESS → ARBITER_SCAN G1–G7"| M_fcufresh
 
         F_trig -->|"tasking arrived"| F_tvalid
         F_tvalid -->|"invalid — I am the leader"| F_reject
@@ -150,19 +154,16 @@ flowchart TB
         M_needed -->|"direct link recovered → no longer needed"| M_VEXIT
         M_needed -->|"direct link still bad → relay still needed"| M_link
 
-        M_link -->|"hops adequate"| M_eff
+        M_link -->|"hops adequate"| M_cont
         M_link -->|"hops degraded"| M_driftq
         M_driftq -->|"drifted + battery ok"| M_repos
         M_driftq -->|"not drifted → EXIT_INEFFECTIVE (jamming / GC / leader fault)"| M_VEXIT
 
-        M_eff -->|"clearly helping"| M_gps
-        M_eff -->|"barely better — possibly redundant"| M_redwarn
-        M_redwarn --> M_gps
-
-        M_gps -->|degraded| M_cont_gps
-        M_gps -->|ok| M_cont
+        M_eff -->|"barely better — advisory"| M_redwarn
+        M_gps -->|"degraded — advisory"| M_cont_gps
 
         M_cont -->|"next tick · +2s"| F_gate
+        M_redwarn -->|"next tick · +2s"| F_gate
         M_cont_gps -->|"next tick · +2s"| F_gate
         M_hold -->|"next tick · +2s"| F_gate
         M_recover -->|"re-check next tick · +2s"| F_gate
