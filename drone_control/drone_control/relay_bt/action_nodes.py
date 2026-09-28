@@ -320,10 +320,8 @@ class ProposeReposition(ActionNodeBase):
 
         threshold_db = self.config.get("reposition_improvement_threshold_db", 5)
         marginal_snr = self.config.get("marginal_snr_db", 13)
-        signal_report = self.bb.get("signal_report") or {}
-        snr_gc  = (signal_report.get("follower_to_gc") or {}).get("snr_db")
-        snr_ldr = ((signal_report.get("leader_to_follower") or {}).get("snr_db")
-                   or (signal_report.get("follower_to_leader") or {}).get("snr_db"))
+        snr_gc  = self.bb.get("follower_snr_db_gc_to_follower")
+        snr_ldr = self.bb.get("follower_snr_db_leader_to_follower")
 
         if snr_gc is not None and snr_ldr is not None:
             gain_headroom = marginal_snr - min(snr_gc, snr_ldr)
