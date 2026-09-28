@@ -88,13 +88,17 @@ Mosquitto is single-threaded; a bridge to a dead upstream endpoint was retrying 
 
 ### ADR-3 — Bucketed R_target with a tolerance radius, not continuous re-optimization
 
-**Decision:** Chain_assigner writes the authorized R_target verbatim. Strategy_evaluator buckets R_target to a fixed grid; the `RelayActuallyImproved` gate fires only when the leader drifts outside a tolerance radius. Small leader movements produce no follower reposition.
+**Decision:** Chain_assigner writes the authorized R_target verbatim. Strategy_evaluator snaps R_target to a fixed `position_bucket_m` grid before publishing each proposal. `RelayActuallyImproved` (G8) fires only when the fresh BandSensorNode R_target has drifted more than `tolerance_radius_m` from the currently authorized target, OR when the authorization timer expires. Small leader movements produce no follower reposition.
+
+**Two distinct non-reposition mechanisms (not one):**
+- **Input-hash dedup**: strategy_evaluator hashes `strategy | battery_bucket(//20) | SNR_bucket(//5)` — position is excluded. If the leader moves but battery and SNR stay in the same buckets, no new proposal is published at all.
+- **G8 tolerance radius**: even when a new proposal is published and authorized, G8 checks `haversine(R_target_now, current_relay_target) <= tolerance_radius_m` each tick. If the new authorized target is close enough to the current one, G8 stays SUCCESS and no reauth is triggered.
 
 **Alternatives rejected:**
 - Continuous re-optimization on every leader position update. Optimal at every instant but produces follower thrash — each ~1 Hz drone_state message could recompute R_target.
 - Time-based re-authorization only (fixed 5-min timer). Simple but decoupled from geometry — updates when nothing has changed and misses genuine geometry changes.
 
-**Why:** Follower motion has real cost (battery, sim time, jitter risk). The P1→P2 transition in the 25-min run confirms this: leader moved ~200 m; bucketed R_target was unchanged; follower stayed put; follower ↔ leader distance shifted from 660 m to 530 m and the relay stayed functional. Continuous re-optimization would have flown the follower for no measurable improvement. The `bucket + tolerance-radius + authorization-timer` triple is what the design converged on after two rewrites within one design pass.
+**Why:** Follower motion has real cost (battery, sim time, jitter risk). Observed once during manual SITL testing on 2026-09-15, not covered by automated tests: the P1→P2 transition (leader moved ~200 m) produced no follower reposition — follower ↔ leader distance shifted from 660 m to 530 m and the relay stayed functional. The non-reposition is attributable to battery/SNR buckets remaining unchanged across P1→P2 (no new proposal published), not to position bucketing. The `input-hash dedup + tolerance-radius + authorization-timer` triple is what the design converged on after two rewrites within one design pass.
 
 ### ADR-4 — PX4 params persisted via `PX4_PARAM_*` env vars, not MAVLink writes
 
