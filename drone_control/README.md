@@ -4,9 +4,9 @@ A follower drone that autonomously positions itself between a leader drone and g
 
 ## Status
 
-- **310 / 310 unit tests passing** (`pytest tests/`, ~50 s), across 18 test files.
-- **Two-drone SITL end-to-end validated** over a **25-minute continuous run** across 5 leader positions (see the influence table below). No RTL flare, no OFFBOARD-lost cascades, no manual intervention.
-- **Band-infeasibility exit path validated** by pushing the leader to 2,913 m from GC and observing the follower's `OFFBOARD → HOLD` transition 2:34 after the feasibility crossover.
+- **336 / 336 unit tests passing** (`pytest tests/`, ~50 s), across 18 test files.
+- **Two-drone SITL end-to-end observed** over a **25-minute manual run** across 5 leader positions (see the influence table below). No RTL flare, no OFFBOARD-lost cascades, no manual intervention. Not covered by automated tests.
+- **Band-infeasibility exit path observed once in manual SITL testing (2026-09-15)**: leader pushed to 2,913 m from GC, follower `OFFBOARD → HOLD` transition seen 2:34 after the feasibility crossover. `BandSensorNode` (the node that writes `band_fillable`) has no unit tests; the specific geometry is not covered by automated tests.
 - ~7,640 LoC across 28 Python modules. Layered along dependency order (waves 0–9).
 
 ## Architecture
