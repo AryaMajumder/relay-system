@@ -24,7 +24,7 @@ The follower's behaviour tree has two families of exit gates, and the difference
 | **G1** `FcuTelemetryFresh` | ARBITER_SCAN | telemetry lost | `FollowerSafetyExit` | **RTL** |
 | **G2** `BatteryStillSufficientToRelay` | ARBITER_SCAN | low battery | `FollowerSafetyExit` | **RTL** |
 | **G3** `OffboardModeHeld` | ARBITER_SCAN | OFFBOARD unrecoverable | `FollowerSafetyExit` | **RTL** |
-| **G4** `PositionServiceable` | ARBITER_SCAN | band no longer feasible | `ProposeExitRelay` | **HOLD in place** |
+| **G4** `PositionServiceable` | ARBITER_SCAN | band infeasible **or** relay target outside geofence | `ProposeExitRelay` | **HOLD in place** |
 | **G5** `RfLinkTelemetryFresh` | ARBITER_SCAN | RF telemetry stale | `ProposeExitRelay` | **HOLD in place** |
 | **G6** `RelayStillNeeded` | ARBITER_SCAN | direct link recovered | `ProposeExitRelay` | **HOLD in place** |
 | **G7** `RelayLinkAdequate` | ARBITER_SCAN | relay hops degraded | `ProposeReposition` / `ProposeExitRelay` | **reposition or HOLD** |
@@ -51,7 +51,7 @@ The `follower d_GC / leader d_GC` ratio ranged 0.53–0.97. As the leader moves 
 
 ### Band-infeasibility handling
 
-Leader pushed to (47.41000, 8.56500), **2,913 m from GC**. At severity 0.7 with `radio_range_m=1500`, the follower's per-hop reach `r_G + r_L ≈ 1,740 m` — any greater and no relay position satisfies both hops.
+Leader pushed to (47.41000, 8.56500), **2,913 m from GC**. At severity 0.7 with `radio_range_m=1500`, the follower's per-hop reach `r_G + r_L ≈ 1,740 m` — any greater and no relay position satisfies both hops. G4 fired on the `band_fillable=False` path (geometric infeasibility); the geofence path was not exercised (`geofence_polygon` is unset in the current config — see `KNOWN_LIMITATIONS.md`).
 
 - **T+0:00** — leader crossed feasibility limit at d_GC = 1,753 m. Follower still OFFBOARD, unchanged.
 - **T+2:34** — follower flight_mode: `OFFBOARD → HOLD`. Setpoint stream stopped. Drone held in place at its last valid relay position.
@@ -84,7 +84,7 @@ Mosquitto is single-threaded; a bridge to a dead upstream endpoint was retrying 
 - Unified exit: all failures RTL. Simpler tree, one exit action to reason about. Would burn battery on flights back home for conditions that will recover on their own.
 - Unified exit: all failures HOLD. Symmetric but strands drones with dying batteries or stale telemetry.
 
-**Why:** These are qualitatively different states of the world. G1–G3 mean the drone is compromised — it should get home while it can. G4–G6 mean the relay job is no longer useful right now, but the drone is fine; hold in place at the last valid position and let the pipeline re-engage if geometry recovers. Observed once during manual SITL testing on 2026-09-15, not covered by automated tests: after G4 fired and the follower entered HOLD, when the leader eventually returned to feasible geometry the follower re-authorized and returned to its original R_target with no operator intervention. RTL would have wasted battery on a round-trip home.
+**Why:** These are qualitatively different states of the world. G1–G3 mean the drone is compromised — it should get home while it can. G4–G6 mean the relay job is no longer useful or reachable right now, but the drone is fine; hold in place at the last valid position and let the pipeline re-engage if conditions recover. Note that G4 covers two distinct failure modes: band geometrically infeasible (`band_fillable=False`), and band feasible but the relay target falls outside the geofence polygon. Both route to `ProposeExitRelay`; only the first means no valid relay position exists. Observed once during manual SITL testing on 2026-09-15, not covered by automated tests: after G4 fired (band infeasible) and the follower entered HOLD, when the leader eventually returned to feasible geometry the follower re-authorized and returned to its original R_target with no operator intervention. RTL would have wasted battery on a round-trip home.
 
 ### ADR-3 — Bucketed R_target with a tolerance radius, not continuous re-optimization
 
