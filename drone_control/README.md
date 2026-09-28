@@ -84,7 +84,7 @@ Mosquitto is single-threaded; a bridge to a dead upstream endpoint was retrying 
 - Unified exit: all failures RTL. Simpler tree, one exit action to reason about. Would burn battery on flights back home for conditions that will recover on their own.
 - Unified exit: all failures HOLD. Symmetric but strands drones with dying batteries or stale telemetry.
 
-**Why:** These are qualitatively different states of the world. G1–G3 mean the drone is compromised — it should get home while it can. G4–G6 mean the relay job is no longer useful right now, but the drone is fine; hold in place at the last valid position and let the pipeline re-engage if geometry recovers. Verified in test: after G4 fired and the follower entered HOLD, when the leader eventually returned to feasible geometry the follower re-authorized and returned to its original R_target with no operator intervention. RTL would have wasted battery on a round-trip home.
+**Why:** These are qualitatively different states of the world. G1–G3 mean the drone is compromised — it should get home while it can. G4–G6 mean the relay job is no longer useful right now, but the drone is fine; hold in place at the last valid position and let the pipeline re-engage if geometry recovers. Observed once during manual SITL testing on 2026-09-15, not covered by automated tests: after G4 fired and the follower entered HOLD, when the leader eventually returned to feasible geometry the follower re-authorized and returned to its original R_target with no operator intervention. RTL would have wasted battery on a round-trip home.
 
 ### ADR-3 — Bucketed R_target with a tolerance radius, not continuous re-optimization
 

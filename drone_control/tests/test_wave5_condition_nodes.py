@@ -50,6 +50,7 @@ from drone_control.relay_bt.condition_nodes import (
 
 _S = py_trees.common.Status.SUCCESS
 _F = py_trees.common.Status.FAILURE
+_R = py_trees.common.Status.RUNNING
 
 
 class FakeClock:
@@ -516,3 +517,252 @@ class TestFcuTelemetryFreshLatch:
         bb.set("drone_state", {"battery_pct": 80, "flight_mode": "OFFBOARD"})
         assert node.update() == _S
         assert bb.get("lost_fc_intent") is False
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Gate 2: BatteryStillSufficientToRelay
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# zero-travel config: positions identical → haversine ≈ 0 → cost_pct ≈ 0
+# required = cost_pct + reserve = 0 + 30 = 30
+_G2_CFG = {
+    "battery_reserve_pct": 30,
+    "drone_model_id": "test_model",
+    "DRONE_MODELS": {
+        "test_model": {
+            "cruise_speed_mps": 10.0,
+            "consumption_rate_pct_per_s": 0.05,
+        }
+    },
+}
+_G2_POS  = {"lat": 47.39, "lon": 8.54, "alt": 50}
+_G2_HOME = {"lat": 47.39, "lon": 8.54, "alt": 0}
+
+
+class TestGate2BatteryStillSufficient:
+
+    def _make(self, cfg=None):
+        bb = _bb()
+        node = BatteryStillSufficientToRelay(bb, cfg or _G2_CFG)
+        return bb, node
+
+    def test_no_drone_state_running(self):
+        """G2: no drone_state on blackboard → RUNNING (not a safety failure yet)."""
+        _, node = self._make()
+        assert node.update() == _R
+
+    def test_missing_position_running(self):
+        """G2: drone_state present but position absent → RUNNING."""
+        bb, node = self._make()
+        bb.set("drone_state", {"battery_pct": 80, "home_pos": _G2_HOME})
+        assert node.update() == _R
+
+    def test_missing_home_pos_running(self):
+        """G2: drone_state present but home_pos absent → RUNNING."""
+        bb, node = self._make()
+        bb.set("drone_state", {"battery_pct": 80, "position": _G2_POS})
+        assert node.update() == _R
+
+    def test_battery_sufficient_succeeds(self):
+        """G2: battery 50% with zero travel cost (required=30) → SUCCESS."""
+        bb, node = self._make()
+        bb.set("drone_state", {"battery_pct": 50, "position": _G2_POS, "home_pos": _G2_HOME})
+        assert node.update() == _S
+
+    def test_battery_at_boundary_fails(self):
+        """G2: battery == required is not strictly greater → FAILURE."""
+        bb, node = self._make()
+        bb.set("drone_state", {"battery_pct": 30, "position": _G2_POS, "home_pos": _G2_HOME})
+        assert node.update() == _F
+
+    def test_battery_insufficient_fails(self):
+        """G2: battery clearly below required → FAILURE."""
+        bb, node = self._make()
+        bb.set("drone_state", {"battery_pct": 10, "position": _G2_POS, "home_pos": _G2_HOME})
+        assert node.update() == _F
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Gate 3: OffboardModeHeld
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestGate3OffboardModeHeld:
+
+    def _make(self, cfg=None):
+        bb = _bb()
+        node = OffboardModeHeld(bb, cfg or {"recover_offboard_max_attempts": 3})
+        return bb, node
+
+    def test_no_drone_state_running(self):
+        """G3: no drone_state → RUNNING."""
+        _, node = self._make()
+        assert node.update() == _R
+
+    def test_offboard_succeeds(self):
+        """G3: OFFBOARD mode → SUCCESS."""
+        bb, node = self._make()
+        bb.set("drone_state", {"flight_mode": "OFFBOARD"})
+        assert node.update() == _S
+
+    def test_non_offboard_running_within_window(self):
+        """G3: dropped mode ticks 1 and 2 of 3 → RUNNING (recovery window open)."""
+        bb, node = self._make()
+        bb.set("drone_state", {"flight_mode": "POSCTL"})
+        assert node.update() == _R  # tick 1
+        assert node.update() == _R  # tick 2
+
+    def test_non_offboard_exhausted_fails(self):
+        """G3: three consecutive non-OFFBOARD ticks exhausts recovery window → FAILURE."""
+        bb, node = self._make()
+        bb.set("drone_state", {"flight_mode": "POSCTL"})
+        node.update()  # tick 1
+        node.update()  # tick 2
+        assert node.update() == _F  # tick 3 >= max_attempts
+
+    def test_counter_resets_on_recovery(self):
+        """G3: recovery clears counter so subsequent drops restart from tick 1."""
+        bb, node = self._make()
+        bb.set("drone_state", {"flight_mode": "POSCTL"})
+        node.update()  # tick 1
+        bb.set("drone_state", {"flight_mode": "OFFBOARD"})
+        assert node.update() == _S   # counter reset
+        bb.set("drone_state", {"flight_mode": "POSCTL"})
+        assert node.update() == _R   # restarted at tick 1, not failure
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Gate 4: PositionServiceable
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_G4_FENCE = [
+    {"lat": 47.39, "lon": 8.54},
+    {"lat": 47.40, "lon": 8.54},
+    {"lat": 47.40, "lon": 8.55},
+    {"lat": 47.39, "lon": 8.55},
+]
+_G4_INSIDE  = {"lat": 47.395, "lon": 8.545}
+_G4_OUTSIDE = {"lat": 47.41,  "lon": 8.56}
+
+
+class TestGate4PositionServiceable:
+
+    def _make(self, cfg=None):
+        bb = _bb()
+        node = PositionServiceable(bb, cfg or {})
+        return bb, node
+
+    def test_band_infeasible_fails(self):
+        """G4: band_fillable=False → FAILURE regardless of relay_target."""
+        bb, node = self._make()
+        bb.set("band_fillable", False)
+        bb.set("current_relay_target", _G4_INSIDE)
+        assert node.update() == _F
+
+    def test_band_none_not_infeasible(self):
+        """G4: band_fillable=None passes the explicit-False check → deferred SUCCESS."""
+        bb, node = self._make()
+        bb.set("band_fillable", None)
+        assert node.update() == _S
+
+    def test_no_relay_target_deferred_success(self):
+        """G4: no relay_target yet (position check deferred) → SUCCESS."""
+        bb, node = self._make()
+        assert node.update() == _S
+
+    def test_no_geofence_succeeds(self):
+        """G4: relay_target present but no geofence_polygon in config → SUCCESS."""
+        bb, node = self._make()
+        bb.set("current_relay_target", _G4_INSIDE)
+        assert node.update() == _S
+
+    def test_target_inside_geofence_succeeds(self):
+        """G4: relay_target inside geofence polygon → SUCCESS."""
+        bb, node = self._make(cfg={"geofence_polygon": _G4_FENCE})
+        bb.set("current_relay_target", _G4_INSIDE)
+        assert node.update() == _S
+
+    def test_target_outside_geofence_fails(self):
+        """G4: relay_target outside geofence polygon → FAILURE."""
+        bb, node = self._make(cfg={"geofence_polygon": _G4_FENCE})
+        bb.set("current_relay_target", _G4_OUTSIDE)
+        assert node.update() == _F
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Gate 5: RfLinkTelemetryFresh
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestGate5RfLinkTelemetryFresh:
+
+    def _make(self, max_age=5.0):
+        clock = FakeClock()
+        bb = TimestampedBlackboard(clock=clock.now)
+        cfg = {"rf_link_max_age_s": max_age}
+        node = RfLinkTelemetryFresh(bb, cfg)
+        return bb, node, clock
+
+    def test_never_received_fails(self):
+        """G5: follower_severity never written → age=None → FAILURE."""
+        _, node, _ = self._make()
+        assert node.update() == _F
+
+    def test_fresh_severity_succeeds(self):
+        """G5: follower_severity written and within max_age → SUCCESS."""
+        bb, node, _ = self._make(max_age=5.0)
+        bb.set("follower_severity", 0.3)
+        assert node.update() == _S
+
+    def test_stale_severity_fails(self):
+        """G5: follower_severity older than max_age → FAILURE."""
+        bb, node, clock = self._make(max_age=5.0)
+        bb.set("follower_severity", 0.3)
+        clock.advance(6.0)
+        assert node.update() == _F
+
+    def test_exactly_at_max_age_is_fresh(self):
+        """G5: age == max_age satisfies age <= max_age → SUCCESS."""
+        bb, node, clock = self._make(max_age=5.0)
+        bb.set("follower_severity", 0.3)
+        clock.advance(5.0)
+        assert node.update() == _S
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Gate 6: RelayStillNeeded
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestGate6RelayStillNeeded:
+
+    def _make(self, cfg=None):
+        bb = _bb()
+        node = RelayStillNeeded(bb, cfg or {})
+        return bb, node
+
+    def test_no_quality_succeeds(self):
+        """G6: gc_leader_direct_quality not set → unknown = relay still needed → SUCCESS."""
+        _, node = self._make()
+        assert node.update() == _S
+
+    def test_poor_link_succeeds(self):
+        """G6: direct link quality below threshold → relay still needed → SUCCESS."""
+        bb, node = self._make()
+        bb.set("gc_leader_direct_quality", 0.5)
+        assert node.update() == _S
+
+    def test_link_at_threshold_fails(self):
+        """G6: quality == 0.85 satisfies >= threshold → direct link recovered → FAILURE."""
+        bb, node = self._make()
+        bb.set("gc_leader_direct_quality", 0.85)
+        assert node.update() == _F
+
+    def test_link_above_threshold_fails(self):
+        """G6: quality clearly above threshold → FAILURE."""
+        bb, node = self._make()
+        bb.set("gc_leader_direct_quality", 0.95)
+        assert node.update() == _F
+
+    def test_custom_threshold(self):
+        """G6: threshold overridden to 0.9; quality=0.85 still below → SUCCESS."""
+        bb, node = self._make(cfg={"relay_exit_quality_threshold": 0.9})
+        bb.set("gc_leader_direct_quality", 0.85)
+        assert node.update() == _S
