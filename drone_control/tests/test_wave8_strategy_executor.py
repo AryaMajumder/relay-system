@@ -7,8 +7,7 @@ BUILDSPEC:     §4.8
 PROVEN column:
   test_single_subscription          -> BUILDSPEC §4.8 "This is its only input"
   test_no_condition_logic           -> BUILDSPEC §4.8 hard rules
-  test_continuous_relay_to_moving / test_chain_relay_to_moving / test_exit_relay_to_open -> BUILDSPEC §4.8 mapping (three of four rows; fourth is test_reposition_no_role_change)
-  test_reposition_no_role_change    -> BUILDSPEC §4.8 REPOSITION_RELAY row
+  test_continuous_relay_to_moving / test_chain_relay_to_moving / test_exit_relay_to_open -> BUILDSPEC §4.8 mapping
   test_exit_sources_indistinguishable -> BUILDSPEC §4.8 hard rule
 """
 
@@ -161,21 +160,6 @@ class TestMappingComplete:
         core, roles = _make_core()
         core.on_authorization(_make_auth("EXIT_RELAY", proposal_id="prop-ddd000000001"))
         assert roles[0] != "IDLE", "'IDLE' is not a §2.9 current_role value"
-
-
-# ── §4.8 REPOSITION_RELAY: no role change ────────────────────────────────────
-
-class TestRepositionNoRoleChange:
-    def test_reposition_no_role_change(self):
-        """
-        REPOSITION_RELAY → no role published.
-        BUILDSPEC §4.8: '*(no change)*' — chain_assigner updates target; no role emitted.
-        """
-        core, roles = _make_core()
-        core.on_authorization(_make_auth("REPOSITION_RELAY", proposal_id="prop-eee000000001"))
-        assert len(roles) == 0, (
-            f"REPOSITION_RELAY must produce zero role publishes, got {roles}"
-        )
 
 
 # ── §4.8 hard rule: EXIT_RELAY sources indistinguishable ─────────────────────

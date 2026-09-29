@@ -86,12 +86,6 @@ class _StrategyExecutorCore:
             # relay_mover starts streaming, relay_position_tracker watches arrival.
             self._publish_role("MOVING_TO_RELAY")
 
-        elif strategy == "REPOSITION_RELAY":
-            # HARD RULE (BUILDSPEC §4.8): no role change.
-            # chain_assigner updates the target; relay_mover picks it up on next tick.
-            # The drone is already RELAYING; only the destination changes.
-            pass
-
         elif strategy == "EXIT_RELAY":
             # HARD RULE (BUILDSPEC §4.8): cannot tell battery vs. timeout vs. link loss.
             # All EXIT_RELAY arrivals are identical here.

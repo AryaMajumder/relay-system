@@ -23,10 +23,7 @@ Root Selector dispatches on role (RELAYING vs IDLE):
   │           ├── G4  Seq(Inv(PositionServiceable),           ProposeExitRelay)
   │           ├── G5  Seq(Inv(RfLinkTelemetryFresh),         ProposeExitRelay)
   │           ├── G6  Seq(Inv(RelayStillNeeded),             ProposeExitRelay)
-  │           ├── G7  Seq(Inv(RelayLinkAdequate),            G7_HANDLER)
-  │           │         G7_HANDLER [Selector]
-  │           │           ├── Seq(DriftedFromBand, ProposeReposition)
-  │           │           └── ProposeExitRelay
+  │           ├── G7  Seq(Inv(RelayLinkAdequate),            ProposeExitRelay)
   │           ├── REAUTH_TIMEOUT  Seq(Inv(ReauthResponseTimedOut), ProposeExitRelay)
   │           └── CONTINUE  AlwaysSucceed                     all gates passed
   └── IDLE_BRANCH [Sequence]            gated NotAlreadyRelaying
@@ -89,15 +86,12 @@ from .condition_nodes import (
     GpsHealthy,
     # reauth timeout (additional, alongside the 9 gates)
     ReauthResponseTimedOut,
-    # reposition condition
-    DriftedFromBand,
 )
 from .action_nodes import (
     ProposeContinuousRelay,
     ProposeChainRelay,
     ProposeLetLeaderIsolate,
     FollowerSafetyExit,
-    ProposeReposition,
     ProposeExitRelay,
 )
 
@@ -158,15 +152,6 @@ def build_relay_decision_tree(bb: TimestampedBlackboard,
 
     # ── RELAYING_BRANCH ───────────────────────────────────────────────────────
 
-    # Gate 7 handler: reposition if drifted + gain ok, else exit
-    g7_handler = _sel("G7_HANDLER",
-        _seq("REPOSITION",
-             _n(DriftedFromBand),
-             _n(ProposeReposition),
-        ),
-        _n(ProposeExitRelay, name="ProposeExitRelay(G7)"),
-    )
-
     # DIAG_SCAN: G8 and G9 run unconditionally every tick, independent of ARBITER_SCAN.
     # Each Seq(node, AlwaysFail) always returns FAILURE so the Selector never short-circuits
     # before the second node. AlwaysSucceed as the terminal child makes DIAG_SCAN always
@@ -214,10 +199,10 @@ def build_relay_decision_tree(bb: TimestampedBlackboard,
              _inv(_n(RelayStillNeeded)),
              _n(ProposeExitRelay, name="ProposeExitRelay(G6)"),
         ),
-        # G7: relay link adequate — PRIMARY trigger, N=3 debounce
+        # G7: relay link adequate — N=3 debounce, then exit
         _seq("G7_LINK",
              _inv(_n(RelayLinkAdequate)),
-             g7_handler,
+             _n(ProposeExitRelay, name="ProposeExitRelay(G7)"),
         ),
         # REAUTH_TIMEOUT: if reauth request timed out → ProposeExitRelay
         _seq("REAUTH_TIMEOUT",

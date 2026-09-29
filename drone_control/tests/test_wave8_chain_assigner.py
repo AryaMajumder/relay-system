@@ -108,16 +108,21 @@ class TestRTargetVerbatim:
             "(haversine is only for eta_s in _compute_eta_s)"
         )
 
-    def test_all_three_movement_strategies_produce_assignment(self):
-        """CONTINUOUS_RELAY, CHAIN_RELAY, REPOSITION_RELAY all produce assignments."""
+    def test_movement_strategies_produce_assignment(self):
+        """CONTINUOUS_RELAY and CHAIN_RELAY both produce assignments."""
         for strategy, pid in [
             ("CONTINUOUS_RELAY",  "prop-001"),
             ("CHAIN_RELAY",       "prop-002"),
-            ("REPOSITION_RELAY",  "prop-003"),
         ]:
             core, assignments = _make_core()
             core.on_authorization(_make_auth(strategy=strategy, proposal_id=pid))
             assert len(assignments) == 1, f"{strategy} must produce exactly one assignment"
+
+    def test_reposition_relay_produces_no_assignment(self):
+        """REPOSITION_RELAY strategy is removed — chain_assigner must ignore it."""
+        core, assignments = _make_core()
+        core.on_authorization(_make_auth(strategy="REPOSITION_RELAY", proposal_id="prop-003"))
+        assert len(assignments) == 0, "REPOSITION_RELAY must produce no assignment (strategy removed)"
 
     def test_exit_relay_produces_no_assignment(self):
         """EXIT_RELAY does not produce a relay_assignment."""

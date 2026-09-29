@@ -776,6 +776,13 @@ class RelayActuallyImproved(ConditionNodeBase):
 
         tolerance_m = (self.bb.get("tolerance_radius_m")
                        or self.config.get("tolerance_radius_m", 10.0))
+        t_lo_band = self.bb.get("band_t_lo")
+        t_hi_band = self.bb.get("band_t_hi")
+        band_D = self.bb.get("band_D")
+        if (t_lo_band is not None and t_hi_band is not None
+                and band_D is not None and band_D > 0):
+            band_width_m = (t_hi_band - t_lo_band) * band_D
+            tolerance_m = min(tolerance_m, band_width_m / 2)
         r_target_now = self.bb.get("R_target")   # BandSensorNode writes this each tick
 
         now = self._clock()
@@ -869,50 +876,6 @@ class ReauthResponseTimedOut(ConditionNodeBase):
         if elapsed < timeout_s:
             return self._set(_S, f"reauth pending: {elapsed:.0f}s/{timeout_s}s elapsed")
         return self._set(_F, f"reauth timed out: {elapsed:.0f}s > {timeout_s}s — triggering exit")
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# REPOSITION / MOVEMENT NODES
-# ═══════════════════════════════════════════════════════════════════════════════
-
-class DriftedFromBand(ConditionNodeBase):
-    """
-    SUCCESS if the current commanded relay target has drifted outside the feasible band.
-    Used on gate 7's FAILURE path to decide reposition vs exit.
-    """
-
-    def update(self):
-        relay_target = self.bb.get("current_relay_target")
-        if not relay_target:
-            self.bb.set("drifted_from_band", False)
-            return self._set(_F, "no current_relay_target — cannot check drift")
-
-        fillable = self.bb.get("band_fillable")
-        if not fillable:
-            self.bb.set("drifted_from_band", True)
-            return self._set(_S, "band infeasible — target is outside (drifted)")
-
-        t_lo = self.bb.get("band_t_lo")
-        t_hi = self.bb.get("band_t_hi")
-        D = self.bb.get("band_D")
-        if t_lo is None or t_hi is None or D is None:
-            self.bb.set("drifted_from_band", False)
-            return self._set(_F, "band data not available")
-
-        gc_pos = self.config["gc_pos"]
-        if D <= 0:
-            self.bb.set("drifted_from_band", False)
-            return self._set(_F, "D=0 — GC and leader co-located")
-
-        t_target = haversine(gc_pos, relay_target) / D
-        inside = t_lo <= t_target <= t_hi
-        if inside:
-            self.bb.set("drifted_from_band", False)
-            return self._set(_F,
-                f"target t={t_target:.2f} inside band [{t_lo:.2f},{t_hi:.2f}] — not drifted")
-        self.bb.set("drifted_from_band", True)
-        return self._set(_S,
-            f"target t={t_target:.2f} outside band [{t_lo:.2f},{t_hi:.2f}] — drifted")
 
 
 class RelayCommandAccepted(ConditionNodeBase):

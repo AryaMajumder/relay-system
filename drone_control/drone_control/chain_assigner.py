@@ -79,7 +79,7 @@ class _ChainAssignerCore:
         strategy = payload.get("strategy", "")
         # EXIT_RELAY: drone must return home — no relay position assignment needed.
         # LET_LEADER_ISOLATE: handled by another path; no position target involved.
-        if strategy not in ("CONTINUOUS_RELAY", "CHAIN_RELAY", "REPOSITION_RELAY"):
+        if strategy not in ("CONTINUOUS_RELAY", "CHAIN_RELAY"):
             return
 
         self._last_auth_key = auth_key

@@ -232,6 +232,61 @@ class TestGate8RelayActuallyImproved:
         node.update()
         assert math.isclose(bb.get("reauth_requested_at"), 5000.0, abs_tol=1e-6)
 
+    def test_gate8_tolerance_capped_by_band_width(self):
+        """
+        tolerance_radius_m is capped to band_width_m/2 when the band is narrower.
+        If band_width_m = 40 m, effective tolerance = min(200, 20) = 20 m.
+        R_target 25 m from current_relay_target → outside cap → FAILURE.
+        """
+        clock = FakeClock(t=1000.0)
+        bb, node = self._make(clock)
+        # current_relay_target at origin
+        current_target = {"lat": 47.39000, "lon": 8.54000, "alt": 0.0}
+        # R_target ~25 m north
+        r_target_now   = {"lat": 47.39022, "lon": 8.54000, "alt": 0.0}
+        bb.set("current_relay_target", current_target)
+        bb.set("authorization_valid_until", clock.now() + 1800.0)
+        bb.set("tolerance_radius_m", 200.0)  # large configured tolerance
+        bb.set("R_target", r_target_now)
+        # band_D=1000m, t_lo=0.1, t_hi=0.14 → band_width_m = 0.04*1000 = 40 m → cap = 20 m
+        bb.set("band_D", 1000.0)
+        bb.set("band_t_lo", 0.10)
+        bb.set("band_t_hi", 0.14)
+        # 25 m > 20 m cap → FAILURE
+        assert node.update() == _F
+
+    def test_gate8_tolerance_not_capped_when_band_wider(self):
+        """
+        When band_width_m/2 >= configured tolerance, the configured tolerance is used.
+        band_width_m = 2000 m, tolerance = 10 m → cap = min(10, 1000) = 10 m.
+        R_target 5 m from current_relay_target → inside → SUCCESS.
+        """
+        clock = FakeClock(t=1000.0)
+        bb, node = self._make(clock)
+        current_target = {"lat": 47.39000, "lon": 8.54000, "alt": 0.0}
+        r_target_now   = {"lat": 47.39004, "lon": 8.54000, "alt": 0.0}  # ~5 m north
+        bb.set("current_relay_target", current_target)
+        bb.set("authorization_valid_until", clock.now() + 1800.0)
+        bb.set("tolerance_radius_m", 10.0)
+        bb.set("R_target", r_target_now)
+        # band_D=1000m, t_lo=0.0, t_hi=2.0 → band_width_m=2000 m → cap = min(10, 1000) = 10 m
+        bb.set("band_D", 1000.0)
+        bb.set("band_t_lo", 0.0)
+        bb.set("band_t_hi", 2.0)
+        assert node.update() == _S
+
+    def test_gate8_tolerance_cap_no_band_data(self):
+        """When band fields are absent the cap is skipped; configured tolerance applies."""
+        clock = FakeClock(t=1000.0)
+        bb, node = self._make(clock)
+        current_target, r_target_now = self._near_pos()
+        bb.set("current_relay_target", current_target)
+        bb.set("authorization_valid_until", clock.now() + 1800.0)
+        bb.set("tolerance_radius_m", 10.0)
+        bb.set("R_target", r_target_now)
+        # no band_D / band_t_lo / band_t_hi on blackboard
+        assert node.update() == _S
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # ReauthResponseTimedOut

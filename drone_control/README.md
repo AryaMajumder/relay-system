@@ -4,7 +4,7 @@ A follower drone that autonomously positions itself between a leader drone and g
 
 ## Status
 
-- **336 / 336 unit tests passing** (`pytest tests/`, ~50 s), across 18 test files.
+- **339 / 339 unit tests passing** (`pytest tests/`, ~30 s), across 18 test files.
 - **Two-drone SITL end-to-end observed** over a **25-minute manual run** across 5 leader positions (see the influence table below). No RTL flare, no OFFBOARD-lost cascades, no manual intervention. Not covered by automated tests.
 - **Band-infeasibility exit path observed once in manual SITL testing (2026-09-15)**: leader pushed to 2,913 m from GC, follower `OFFBOARD → HOLD` transition seen 2:34 after the feasibility crossover. `BandSensorNode` (the node that writes `band_fillable`) has no unit tests; the specific geometry is not covered by automated tests.
 - ~7,640 LoC across 28 Python modules. Layered along dependency order (waves 0–9).
@@ -27,11 +27,11 @@ The follower's behaviour tree has two families of exit gates, and the difference
 | **G4** `PositionServiceable` | ARBITER_SCAN | band infeasible **or** relay target outside geofence | `ProposeExitRelay` | **HOLD in place** |
 | **G5** `RfLinkTelemetryFresh` | ARBITER_SCAN | RF telemetry stale | `ProposeExitRelay` | **HOLD in place** |
 | **G6** `RelayStillNeeded` | ARBITER_SCAN | direct link recovered | `ProposeExitRelay` | **HOLD in place** |
-| **G7** `RelayLinkAdequate` | ARBITER_SCAN | relay hops degraded | `ProposeReposition` / `ProposeExitRelay` | **reposition or HOLD** |
+| **G7** `RelayLinkAdequate` | ARBITER_SCAN | relay hops degraded for 3 ticks | `ProposeExitRelay` | **HOLD in place** |
 | **G8** `RelayActuallyImproved` | DIAG_SCAN | auth stale / relay not improving | writes `reauth_requested_at` | **advisory — never exits** |
 | **G9** `GpsHealthy` | DIAG_SCAN | GPS degraded | GPS alert published | **advisory — never exits** |
 
-G1–G3 are **safety gates** — the drone is physically compromised, get it home. G4–G7 are **viability gates** — the drone is healthy but the *relay task* is no longer useful or reachable; hold in place or reposition, let the pipeline re-engage if geometry recovers. G8–G9 are **diagnostic gates** — they run unconditionally every tick in a separate `DIAG_SCAN` step before `ARBITER_SCAN`, so a G1–G7 alarm never suppresses them. Neither G8 nor G9 can exit the relay; their outputs are advisory signals to the GC.
+G1–G3 are **safety gates** — the drone is physically compromised, get it home. G4–G7 are **viability gates** — the drone is healthy but the *relay task* is no longer useful or reachable; hold in place at the last valid position and let the pipeline re-engage if conditions recover. G8–G9 are **diagnostic gates** — they run unconditionally every tick in a separate `DIAG_SCAN` step before `ARBITER_SCAN`, so a G1–G7 alarm never suppresses them. Neither G8 nor G9 can exit the relay; their outputs are advisory signals to the GC.
 
 ## Demonstrated behaviour
 
@@ -84,21 +84,24 @@ Mosquitto is single-threaded; a bridge to a dead upstream endpoint was retrying 
 - Unified exit: all failures RTL. Simpler tree, one exit action to reason about. Would burn battery on flights back home for conditions that will recover on their own.
 - Unified exit: all failures HOLD. Symmetric but strands drones with dying batteries or stale telemetry.
 
-**Why:** These are qualitatively different states of the world. G1–G3 mean the drone is compromised — it should get home while it can. G4–G6 mean the relay job is no longer useful or reachable right now, but the drone is fine; hold in place at the last valid position and let the pipeline re-engage if conditions recover. Note that G4 covers two distinct failure modes: band geometrically infeasible (`band_fillable=False`), and band feasible but the relay target falls outside the geofence polygon. Both route to `ProposeExitRelay`; only the first means no valid relay position exists. Observed once during manual SITL testing on 2026-09-15, not covered by automated tests: after G4 fired (band infeasible) and the follower entered HOLD, when the leader eventually returned to feasible geometry the follower re-authorized and returned to its original R_target with no operator intervention. RTL would have wasted battery on a round-trip home.
+**Why:** These are qualitatively different states of the world. G1–G3 mean the drone is compromised — it should get home while it can. G4–G6 mean the relay job is no longer useful or reachable right now, but the drone is fine; hold in place at the last valid position and let the pipeline re-engage if conditions recover. Note that G4 covers two distinct failure modes: band geometrically infeasible (`band_fillable=False`), and band feasible but the relay target falls outside the geofence polygon. Both route to `ProposeExitRelay`; only the first means no valid relay position exists. Observed once in manual SITL testing on 2026-09-15; the re-engagement path has no automated test: after G4 fired (band infeasible) and the follower entered HOLD, when the leader eventually returned to feasible geometry the follower re-authorized and returned to its original R_target with no operator intervention. RTL would have wasted battery on a round-trip home.
 
-### ADR-3 — Bucketed R_target with a tolerance radius, not continuous re-optimization
+### ADR-3 — Bucketed R_target with a geometry-capped tolerance radius, not continuous re-optimization
 
-**Decision:** Chain_assigner writes the authorized R_target verbatim. Strategy_evaluator snaps R_target to a fixed `position_bucket_m` grid before publishing each proposal. `RelayActuallyImproved` (G8) fires only when the fresh BandSensorNode R_target has drifted more than `tolerance_radius_m` from the currently authorized target, OR when the authorization timer expires. Small leader movements produce no follower reposition.
+**Decision:** Chain_assigner writes the authorized R_target verbatim. Strategy_evaluator snaps R_target to a fixed `position_bucket_m` grid before publishing each proposal. `RelayActuallyImproved` (G8) fires only when the fresh BandSensorNode R_target has drifted more than the effective tolerance from the currently authorized target, OR when the authorization timer expires. Small leader movements produce no follower reposition.
+
+The effective G8 tolerance is `min(tolerance_radius_m, band_width_m / 2)` — the configured tolerance capped at half the current feasible band width. `band_width_m = (band_t_hi - band_t_lo) × band_D`. This ties reauth geometry to the actual band rather than an arbitrary fixed radius. `ProposeReposition` and `DriftedFromBand` were removed; G8 now owns all geometry-driven repositioning through the reauth cycle.
 
 **Two distinct non-reposition mechanisms (not one):**
 - **Input-hash dedup**: strategy_evaluator hashes `strategy | battery_bucket(//20) | SNR_bucket(//5)` — position is excluded. If the leader moves but battery and SNR stay in the same buckets, no new proposal is published at all.
-- **G8 tolerance radius**: even when a new proposal is published and authorized, G8 checks `haversine(R_target_now, current_relay_target) <= tolerance_radius_m` each tick. If the new authorized target is close enough to the current one, G8 stays SUCCESS and no reauth is triggered.
+- **G8 tolerance radius** (geometry-capped): even when a new proposal is published and authorized, G8 checks `haversine(R_target_now, current_relay_target) <= min(tolerance_radius_m, band_width_m/2)` each tick. If the new authorized target is close enough to the current one, G8 stays SUCCESS and no reauth is triggered.
 
 **Alternatives rejected:**
 - Continuous re-optimization on every leader position update. Optimal at every instant but produces follower thrash — each ~1 Hz drone_state message could recompute R_target.
 - Time-based re-authorization only (fixed 5-min timer). Simple but decoupled from geometry — updates when nothing has changed and misses genuine geometry changes.
+- Separate `ProposeReposition` / `DriftedFromBand` path on G7 failure. Reposition path was unreachable once DIAG_SCAN moved G8 to run before ARBITER_SCAN (see ADR-7); removed to eliminate the dead code.
 
-**Why:** Follower motion has real cost (battery, sim time, jitter risk). Observed once during manual SITL testing on 2026-09-15, not covered by automated tests: the P1→P2 transition (leader moved ~200 m) produced no follower reposition — follower ↔ leader distance shifted from 660 m to 530 m and the relay stayed functional. The non-reposition is attributable to battery/SNR buckets remaining unchanged across P1→P2 (no new proposal published), not to position bucketing. The `input-hash dedup + tolerance-radius + authorization-timer` triple is what the design converged on after two rewrites within one design pass.
+**Why:** Follower motion has real cost (battery, sim time, jitter risk). Observed once during manual SITL testing on 2026-09-15, not covered by automated tests: the P1→P2 transition (leader moved ~200 m) produced no follower reposition — follower ↔ leader distance shifted from 660 m to 530 m and the relay stayed functional. The non-reposition is attributable to battery/SNR buckets remaining unchanged across P1→P2 (no new proposal published), not to position bucketing. The `input-hash dedup + geometry-capped tolerance + authorization-timer` triple is what the design converged on.
 
 ### ADR-4 — PX4 params persisted via `PX4_PARAM_*` env vars, not MAVLink writes
 
@@ -129,12 +132,28 @@ Mosquitto is single-threaded; a bridge to a dead upstream endpoint was retrying 
 
 **Why:** Lockstep is fighting the multi-instance load on the host (drones move at ~3 m/s instead of 5 m/s cruise; console emits `simulator_mavlink poll timeout` errors), but the alternative doesn't actually work — the timestamp validator lives elsewhere in the sensor drivers. Correctly reverted. The proper long-term fix is switching from jMAVSim to Gazebo, which handles multi-instance lockstep cleanly; not done yet.
 
+### ADR-7 — G8 moved to DIAG_SCAN; reposition path removed; tolerance capped at band half-width
+
+**Decision:** `RelayActuallyImproved` (G8) and `GpsHealthy` (G9) were moved from ARBITER_SCAN into a dedicated `DIAG_SCAN` step that runs unconditionally before ARBITER_SCAN in the RELAYING_BRANCH Sequence. The `ProposeReposition` / `DriftedFromBand` reposition path on G7 failure was deleted. G8's effective tolerance was capped at `min(tolerance_radius_m, band_width_m / 2)`.
+
+**The bug this fixed:** In the original tree, G8 was a gate inside ARBITER_SCAN. ARBITER_SCAN is a Selector: once any earlier child returns SUCCESS (i.e., a gate fires), the Selector stops and skips all remaining children. This meant that whenever G1–G7 triggered, G8 was never evaluated. In particular: whenever G7 fired (relay link degraded), G8's reauth-request write was suppressed — the exact moment when a geometry re-check was most needed was the moment G8 was silenced.
+
+**The DIAG_SCAN fix:** G8 and G9 are wrapped in `Seq(node, AlwaysFail)` inside a Selector whose terminal child is `AlwaysSucceed`. This structure makes every diagnostic node execute every tick regardless of its result, and makes `DIAG_SCAN` always return SUCCESS so the RELAYING_BRANCH Sequence continues to ARBITER_SCAN unconditionally. G8 and G9 can now never be masked by a gate alarm.
+
+**Why the tolerance cap mattered:** Once G8 always runs, an uncapped `tolerance_radius_m` could silently pass even when the band had contracted significantly. With `radio_range_m=800` and `jamming_severity_factor=0.6` (the default config), each 0.1 step in severity shifts each band edge by `800 × 0.6 × 0.1 = 48 m`. A configured tolerance of, say, 100 m would suppress reauth through two full severity-step increments of band contraction. The cap `min(tolerance_radius_m, band_width_m / 2)` ensures the effective tolerance is always bounded by the half-width of the feasible band — as the band contracts, so does the threshold at which G8 fires.
+
+**Why the reposition path was removed:** `ProposeReposition` / `DriftedFromBand` sat on G7's FAILURE path: when the relay link degraded, G7 triggered, and the handler checked whether the authorized target had drifted outside the band; if so, it attempted a reposition instead of exiting. Once G8 runs before ARBITER_SCAN, G8 will already have detected any geometry drift and written `reauth_requested_at` before G7's Sequence is ever entered. A separate reposition branch adds control-flow complexity without adding capability G8 + reauth doesn't already provide. The only meaningful residue was `DriftedFromBand`'s write of `drifted_from_band` used by `ProposeExitRelay`'s reason field — removed along with the branch.
+
+**Alternatives rejected:**
+- Keep `ProposeReposition` but gate it on `DriftedFromBand`. The reposition action was never meaningfully reachable once DIAG_SCAN was in place; retaining it would preserve dead code.
+- Cap tolerance as `min(tolerance_radius_m, band_width_m)` (full width, not half). Too loose — G8 would pass when the authorized target sits at one edge of the band, which is the worst-margin position.
+
 ## Known limitations
 
 See [`KNOWN_LIMITATIONS.md`](KNOWN_LIMITATIONS.md) for the full inventory. Short version:
 
 - No GC-side software. The "GC" that authorizes proposals is a local stub that auto-authorizes everything.
-- No end-to-end pytest. The 25-minute run and the infeasibility test were executed by hand against SITL; all 308 passing tests are unit-level.
+- No end-to-end pytest. The 25-minute run and the infeasibility test were executed by hand against SITL; all 339 passing tests are unit-level.
 - Multi-drone chain relay is a stub. `CHAIN_RELAY` flows through the pipeline; `chain_assigner` assigns a single target. Peer discovery, slot assignment, handoff sequencing between multiple followers do not exist.
 - Geofence polygon absent from config. `relay_decision_authority` calls `_point_in_polygon()` if `geofence_polygon` is set. It isn't. Spatial constraint validation silently passes.
 - Symmetric re-engagement was observed but not measured. Exact timing for feasible-again → OFFBOARD was not captured because logging was not running during that transition.
@@ -156,7 +175,7 @@ See [`KNOWN_LIMITATIONS.md`](KNOWN_LIMITATIONS.md) for the full inventory. Short
 drone_control/                  # 22 top-level modules
   relay_bt/                     # behaviour tree — blackboard, geometry, condition/action nodes, tree_builder
   config/                       # demo_config.py — the entire config surface
-tests/                          # 24 test files, 310 test cases (all passing)
+tests/                          # 18 test files, 339 test cases (all passing)
 launch/                         # ROS 2 launch files
 docs/
   architecture.md               # full Mermaid flow diagram + design invariants

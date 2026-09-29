@@ -44,6 +44,11 @@ The forward direction (feasible → infeasible) is measured: 2:34 delay from cro
 
 ## Not addressed
 
+### Physical drift not detected during RELAYING
+
+`within_acceptance_radius` in `relay_position_tracker` latches `True` at arrival and is never re-evaluated during `RELAYING`. `distance_to_target_decreasing` is locked `False` throughout `RELAYING` — the computation is gated on `not self._arrived`. On a real airframe, physical displacement from the relay position (wind, GPS error) would degrade SNR until G7 fires, at which point the G7 handler exits with `ProposeExitRelay` rather than letting the mover correct. The fix is a live on-station signal in `relay_position_tracker` computed every tick independent of the arrival latch.
+
+
 - Ground station UI (drone position map with GC and follower markers is provided as a local Leaflet dashboard and a Foxglove Studio bridge, but these are operator-side visualizations, not a real GC).
 - Encrypted MQTT (`telemetry_enc` topics carry base64-wrapped payloads but do not integrate a real key management path).
 - Battery / cruise-speed airframe constants (`consumption_rate_pct_per_s`, `cruise_speed_mps`) carry arbitrary placeholder values in `config/demo_config.py`'s `DRONE_MODELS["generic"]` section — 0.05 %/s and 12.0 m/s. The `_Unresolved` sentinel machinery (`config/demo_config.py`) remains available: replace either value with `_Unresolved("...")` and any arithmetic on it raises `RuntimeError` at the point of use, preventing silent bad answers. Deliberately arbitrary; tune to the actual airframe before flying.

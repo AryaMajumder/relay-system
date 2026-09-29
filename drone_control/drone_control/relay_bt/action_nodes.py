@@ -281,75 +281,6 @@ class FollowerSafetyExit(ActionNodeBase):
         return self._set(py_trees.common.Status.SUCCESS, f"RTL commanded: {reason}")
 
 
-class ProposeReposition(ActionNodeBase):
-    """
-    Fires on gate 7 FAILURE + target drifted from band.
-    Reads R_target from blackboard (Decision 5). Does NOT compute relay position.
-
-    Internal checks (returns FAILURE if either fails, Selector falls to ProposeExitRelay):
-      1. Reposition battery predicate: battery > move + return + RESERVE.
-      2. Gain headroom >= reposition_improvement_threshold_db (5 dB).
-
-    Cross-wiring guard: uses reposition_improvement_threshold_db (5 dB) NOT
-    relay_effective_snr_improvement_db (3 dB).
-    Uses drone telemetry speed/endurance, not §7.1 model constants.
-    """
-
-    def update(self) -> py_trees.common.Status:
-        R_target = self.bb.get("R_target")
-        if R_target is None:
-            return self._set(py_trees.common.Status.FAILURE, "R_target not on blackboard")
-
-        drone_state = self.bb.get("drone_state") or {}
-        battery = drone_state.get("battery_pct", 0.0)
-        current_pos = drone_state.get("position")
-        home_pos = drone_state.get("home_pos")
-        if not current_pos or not home_pos:
-            return self._set(py_trees.common.Status.FAILURE,
-                             "drone_state missing position or home_pos")
-
-        speed, endurance = _model_constants(self.config)
-        reserve = self.config.get("battery_reserve_pct", 30)
-
-        d_to_target = haversine(current_pos, R_target)
-        d_return    = haversine(R_target, home_pos)
-        cost = _cost_pct(d_to_target + d_return, speed, endurance)
-        if battery <= cost + reserve:
-            return self._set(py_trees.common.Status.FAILURE,
-                             f"reposition battery: {battery:.0f}% <= {cost + reserve:.1f}%")
-
-        threshold_db = self.config.get("reposition_improvement_threshold_db", 5)
-        marginal_snr = self.config.get("marginal_snr_db", 13)
-        snr_gc  = self.bb.get("follower_snr_db_gc_to_follower")
-        snr_ldr = self.bb.get("follower_snr_db_leader_to_follower")
-
-        if snr_gc is not None and snr_ldr is not None:
-            gain_headroom = marginal_snr - min(snr_gc, snr_ldr)
-            if gain_headroom < threshold_db:
-                return self._set(py_trees.common.Status.FAILURE,
-                                 f"gain headroom {gain_headroom:.1f}dB < {threshold_db}dB")
-
-        eta_s = (d_to_target / speed) if speed > 0 else 0.0
-        proposal = {
-            "proposal_id":    self.proposal_id,
-            "timestamp":      time.time(),
-            "strategy":       "REPOSITION_RELAY",
-            "relay_position": R_target,
-            "cost": {
-                "battery_cost_pct": round(cost, 1),
-                "repositioning_m":  round(d_to_target, 1),
-                "eta_seconds":      round(eta_s, 1),
-            },
-        }
-        self.bb.set("pending_proposal", proposal)
-        log.info(
-            "[ProposeReposition] REPOSITION_RELAY to (%.5f,%.5f) cost=%.1f%% eta=%.0fs",
-            R_target["lat"], R_target["lon"], cost, eta_s,
-        )
-        return self._set(py_trees.common.Status.SUCCESS,
-                         f"REPOSITION_RELAY proposed, eta {eta_s:.0f}s cost {cost:.1f}%")
-
-
 class ProposeExitRelay(ActionNodeBase):
     """
     Proposes exit with diagnostic context; the GC decides next action.
@@ -366,8 +297,6 @@ class ProposeExitRelay(ActionNodeBase):
             reason, trigger = "direct_link_recovered", "gate_6"
         elif band_fillable is False:
             reason, trigger = "position_infeasible", "gate_4"
-        elif self.bb.get("drifted_from_band"):
-            reason, trigger = "reposition_declined", "gate_7"
         else:
             reason, trigger = "link_ineffective", "gate_7"
 

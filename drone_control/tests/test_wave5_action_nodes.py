@@ -27,7 +27,6 @@ from drone_control.relay_bt.action_nodes import (
     ProposeChainRelay,
     ProposeLetLeaderIsolate,
     FollowerSafetyExit,
-    ProposeReposition,
     ProposeExitRelay,
 )
 import drone_control.relay_bt.action_nodes as _action_mod
