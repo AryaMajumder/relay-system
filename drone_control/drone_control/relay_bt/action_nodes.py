@@ -288,9 +288,8 @@ class ProposeExitRelay(ActionNodeBase):
     """
 
     def update(self) -> py_trees.common.Status:
-        gate_8_advisory = self.bb.get("gate_8_advisory") or {}
-        band_fillable   = self.bb.get("band_fillable")
-        direct_quality  = self.bb.get("gc_leader_direct_quality")
+        band_fillable  = self.bb.get("band_fillable")
+        direct_quality = self.bb.get("gc_leader_direct_quality")
         threshold = self.config.get("relay_exit_quality_threshold", 0.85)
 
         if direct_quality is not None and direct_quality >= threshold:
@@ -301,12 +300,11 @@ class ProposeExitRelay(ActionNodeBase):
             reason, trigger = "link_ineffective", "gate_7"
 
         proposal = {
-            "proposal_id":       self.proposal_id,
-            "timestamp":         time.time(),
-            "strategy":          "EXIT_RELAY",
-            "reason":            reason,
-            "trigger":           trigger,
-            "relay_vs_baseline": gate_8_advisory,
+            "proposal_id": self.proposal_id,
+            "timestamp":   time.time(),
+            "strategy":    "EXIT_RELAY",
+            "reason":      reason,
+            "trigger":     trigger,
         }
         self.bb.set("pending_proposal", proposal)
         log.info("[ProposeExitRelay] EXIT_RELAY: reason=%s trigger=%s", reason, trigger)

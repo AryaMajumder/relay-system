@@ -135,7 +135,7 @@ class GeometryFeasible(ConditionNodeBase):
         gc_pos = self.config["gc_pos"]
         gc_range = self.config.get("gc_radio_range_m", self.config.get("radio_range_m", 800))
         ldr_range = self.config.get("leader_radio_range_m", self.config.get("radio_range_m", 800))
-        sev = _jamming_severity(self.bb)
+        sev = _follower_severity(self.bb, self.config)
         factor = self.config.get("jamming_severity_factor", 0.6)
 
         eff_gc = effective_radio_range(gc_range, sev, factor)
@@ -149,8 +149,6 @@ class DataFreshness(ConditionNodeBase):
     """
     SUCCESS if drone_state source timestamp is within its staleness window.
     Uses SOURCE timestamps (§5.6).
-    BUILDSPEC §8 verification: signal_report was removed from the design; per-hop
-    freshness is enforced by BandSensorNode via radio_health payloads, not here.
     """
 
     def update(self):
@@ -282,7 +280,7 @@ class GeofenceContainsRelayPos(ConditionNodeBase):
         gc_range = self.config.get("gc_radio_range_m", self.config.get("radio_range_m", 800))
         ldr_range = self.config.get("leader_radio_range_m", self.config.get("radio_range_m", 800))
         polygon = self.config.get("geofence_polygon", [])
-        sev = _jamming_severity(self.bb)
+        sev = _follower_severity(self.bb, self.config)
         factor = self.config.get("jamming_severity_factor", 0.6)
 
         relay_pos = compute_relay_position(
@@ -326,7 +324,7 @@ class BatterySufficientForReturn(ConditionNodeBase):
         gc_pos    = self.config["gc_pos"]
         gc_range  = self.config.get("gc_radio_range_m", self.config.get("radio_range_m", 800))
         ldr_range = self.config.get("leader_radio_range_m", self.config.get("radio_range_m", 800))
-        sev       = _jamming_severity(self.bb)
+        sev       = _follower_severity(self.bb, self.config)
         factor    = self.config.get("jamming_severity_factor", 0.6)
 
         relay_pos = compute_relay_position(
@@ -521,8 +519,7 @@ class BandSensorNode(ConditionNodeBase):
             sev_ldr = ldr_sev_val
             cap_leader = effective_radio_range(ldr_range, sev_ldr, factor)
 
-        fol_sev_val, fol_fresh, _ = self.bb.get_with_freshness("follower_severity", max_rh_age)
-        severity = fol_sev_val if fol_fresh else stale_sev
+        severity = _follower_severity(self.bb, self.config)
         self.bb.set("stale_radio_health", stale_flag)
 
         D = gap_distance(gc_pos, leader_pos)
@@ -678,7 +675,7 @@ class PositionServiceable(ConditionNodeBase):
 
 class RfLinkTelemetryFresh(ConditionNodeBase):
     """
-    Gate 5 — SUCCESS if signal_report is within rf_link_max_age_s.
+    Gate 5 — SUCCESS if follower_severity is within rf_link_max_age_s.
     Uses SOURCE timestamps (§5.6). Stale > max_age → FAILURE → forced exit.
     BUILDSPEC §4.13.
     """
@@ -929,7 +926,13 @@ class RelayArrived(ConditionNodeBase):
 
 # ── Private helpers ───────────────────────────────────────────────────────────
 
-def _jamming_severity(bb: TimestampedBlackboard) -> float:
-    """Read jamming severity from signal_report, defaulting to 0.0."""
-    signal_report = bb.get("signal_report") or {}
-    return (signal_report.get("jamming") or {}).get("severity", 0.0) or 0.0
+def _follower_severity(bb: TimestampedBlackboard, config: dict) -> float:
+    """
+    Read follower jamming severity via freshness check; fall back to stale_severity_floor.
+    Shared by BandSensorNode and the IDLE entry checks so all use the same source
+    (follower_severity) and the same staleness window and fallback.
+    """
+    max_rh_age = config.get("radio_health_max_age_s", 10.0)
+    stale_sev  = config.get("stale_severity_floor", 0.5)
+    val, fresh, _ = bb.get_with_freshness("follower_severity", max_rh_age)
+    return val if fresh else stale_sev

@@ -46,6 +46,8 @@ from drone_control.relay_bt.condition_nodes import (
     RelayStillNeeded,
     RelayLinkAdequate,
     GpsHealthy,
+    GeometryFeasible,
+    BandSensorNode,
 )
 
 _S = py_trees.common.Status.SUCCESS
@@ -821,3 +823,100 @@ class TestGate6RelayStillNeeded:
         bb, node = self._make(cfg={"relay_exit_quality_threshold": 0.9})
         bb.set("gc_leader_direct_quality", 0.85)
         assert node.update() == _S
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Severity source invariant — GeometryFeasible must agree with BandSensorNode
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_GC_POS     = {"lat": 47.39000, "lon": 8.54000, "alt": 0.0}
+_LEADER_FAR = {"lat": 47.39900, "lon": 8.54000, "alt": 50.0}  # ~1000 m north
+
+_SEV_CFG = {
+    "gc_pos":                  _GC_POS,
+    "radio_range_m":           800,
+    "gc_radio_range_m":        800,
+    "leader_radio_range_m":    800,
+    "jamming_severity_factor": 0.6,
+    "radio_health_max_age_s":  10.0,
+    "stale_severity_floor":    0.5,
+}
+
+
+class TestSeveritySourceInvariant:
+    """
+    GeometryFeasible must read follower_severity (not the dead signal_report key).
+    Invariant: for the same blackboard inputs BandSensorNode and GeometryFeasible
+    must agree on feasibility. Prior to the fix, GeometryFeasible always used
+    severity=0.0 (signal_report never written) while BandSensorNode used the real
+    value, so a relay that BandSensorNode declared infeasible at sev=0.7 appeared
+    feasible to the entry check.
+    """
+
+    def _setup(self, fol_sev, gc_sev=0.0, leader_sev=0.0):
+        clock = FakeClock(t=1000.0)
+        bb = _bb(clock)
+        bb.set("follower_severity", fol_sev)
+        bb.set("gc_severity",       gc_sev)
+        bb.set("leader_severity",   leader_sev)
+        bb.set("relay_tasking_received", {"leader_pos": _LEADER_FAR})
+        return bb, clock
+
+    def test_infeasible_at_high_severity_matches_band_sensor(self):
+        """
+        D ≈ 1000 m, radio_range=800, sev=0.7, factor=0.6:
+          BandSensorNode:  r_G = r_L = 800*0.58 = 464 m → 464+464=928 < 1000 → infeasible
+          GeometryFeasible: eff = 464 → span*0.85 = 789 < 1000 → infeasible
+        Both must return infeasible. Before the fix, GeometryFeasible used sev=0
+        (signal_report never written) → eff=800 → span*0.85=1360 > 1000 → feasible (WRONG).
+        """
+        bb, clock = self._setup(fol_sev=0.7)
+
+        band_node = BandSensorNode(bb=bb, config=_SEV_CFG, clock=clock.now)
+        band_node.update()
+        assert bb.get("band_fillable") is False, (
+            "BandSensorNode: expected band_fillable=False at D≈1000m, sev=0.7"
+        )
+
+        geo_node = GeometryFeasible(bb=bb, config=_SEV_CFG, clock=clock.now)
+        result = geo_node.update()
+        assert result == _F, (
+            f"GeometryFeasible: expected FAILURE (infeasible) at D≈1000m, sev=0.7, got {result}"
+        )
+
+    def test_feasible_at_zero_severity_matches_band_sensor(self):
+        """D ≈ 1000 m, sev=0.0: both compute full range (800 m), both feasible."""
+        bb, clock = self._setup(fol_sev=0.0)
+
+        band_node = BandSensorNode(bb=bb, config=_SEV_CFG, clock=clock.now)
+        band_node.update()
+        assert bb.get("band_fillable") is True, (
+            "BandSensorNode: expected band_fillable=True at D≈1000m, sev=0.0"
+        )
+
+        geo_node = GeometryFeasible(bb=bb, config=_SEV_CFG, clock=clock.now)
+        result = geo_node.update()
+        assert result == _S, (
+            f"GeometryFeasible: expected SUCCESS (feasible) at D≈1000m, sev=0.0, got {result}"
+        )
+
+    def test_stale_severity_falls_back_to_floor(self):
+        """
+        follower_severity written 15s ago (> max_age=10s) → stale.
+        _follower_severity falls back to stale_severity_floor=0.5.
+        GeometryFeasible must use 0.5, not 0.0.
+        """
+        clock = FakeClock(t=1000.0)
+        bb = _bb(clock)
+        bb.set("follower_severity", 0.0)   # written at t=1000
+        bb.set("gc_severity",       0.0)
+        bb.set("leader_severity",   0.0)
+        bb.set("relay_tasking_received", {"leader_pos": _LEADER_FAR})
+        clock.advance(15.0)                # now t=1015; follower_severity is 15s old → stale
+
+        # At stale_floor=0.5: eff=800*(1-0.3)=560; span=560*2*0.85=952 < 1000 → infeasible
+        geo_node = GeometryFeasible(bb=bb, config=_SEV_CFG, clock=clock.now)
+        result = geo_node.update()
+        assert result == _F, (
+            f"Stale severity should fall back to 0.5 → infeasible at D≈1000m, got {result}"
+        )
