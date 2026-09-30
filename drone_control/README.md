@@ -4,7 +4,7 @@ A follower drone that autonomously positions itself between a leader drone and g
 
 ## Status
 
-- **339 / 339 unit tests passing** (`pytest tests/`, ~30 s), across 18 test files.
+- **342 / 342 unit tests passing** (`pytest tests/`, ~30 s), across 18 test files.
 - **Two-drone SITL end-to-end observed** over a **25-minute manual run** across 5 leader positions (see the influence table below). No RTL flare, no OFFBOARD-lost cascades, no manual intervention. Not covered by automated tests.
 - **Band-infeasibility exit path observed once in manual SITL testing (2026-09-15)**: leader pushed to 2,913 m from GC, follower `OFFBOARD → HOLD` transition seen 2:34 after the feasibility crossover. `BandSensorNode` (the node that writes `band_fillable`) has no unit tests; the specific geometry is not covered by automated tests.
 - ~7,640 LoC across 28 Python modules. Layered along dependency order (waves 0–9).
@@ -153,7 +153,7 @@ The effective G8 tolerance is `min(tolerance_radius_m, band_width_m / 2)` — th
 See [`KNOWN_LIMITATIONS.md`](KNOWN_LIMITATIONS.md) for the full inventory. Short version:
 
 - No GC-side software. The "GC" that authorizes proposals is a local stub that auto-authorizes everything.
-- No end-to-end pytest. The 25-minute run and the infeasibility test were executed by hand against SITL; all 339 passing tests are unit-level.
+- No end-to-end pytest. The 25-minute run and the infeasibility test were executed by hand against SITL; all 342 passing tests are unit-level.
 - Multi-drone chain relay is a stub. `CHAIN_RELAY` flows through the pipeline; `chain_assigner` assigns a single target. Peer discovery, slot assignment, handoff sequencing between multiple followers do not exist.
 - Geofence polygon absent from config. `relay_decision_authority` calls `_point_in_polygon()` if `geofence_polygon` is set. It isn't. Spatial constraint validation silently passes.
 - Symmetric re-engagement was observed but not measured. Exact timing for feasible-again → OFFBOARD was not captured because logging was not running during that transition.
@@ -175,7 +175,7 @@ See [`KNOWN_LIMITATIONS.md`](KNOWN_LIMITATIONS.md) for the full inventory. Short
 drone_control/                  # 22 top-level modules
   relay_bt/                     # behaviour tree — blackboard, geometry, condition/action nodes, tree_builder
   config/                       # demo_config.py — the entire config surface
-tests/                          # 18 test files, 339 test cases (all passing)
+tests/                          # 18 test files, 342 test cases (all passing)
 launch/                         # ROS 2 launch files
 docs/
   architecture.md               # full Mermaid flow diagram + design invariants
