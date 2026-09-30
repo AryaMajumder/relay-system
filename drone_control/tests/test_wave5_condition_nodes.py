@@ -32,6 +32,8 @@ for p in (_PKG_ROOT, _RBT):
         sys.path.insert(0, p)
 
 from drone_control.relay_bt.blackboard import TimestampedBlackboard
+from drone_control.relay_bt.tree_builder import build_relay_decision_tree
+from drone_control.config.demo_config import DEMO_CONFIG
 import drone_control.relay_bt.condition_nodes as cn
 from drone_control.relay_bt.condition_nodes import (
     MAINTENANCE_GATES,
@@ -744,6 +746,15 @@ class TestGate4PositionServiceable:
         bb.set("current_relay_target", _G4_OUTSIDE)
         assert node.update() == _F
 
+    def test_recovery_no_latch(self):
+        """G4 has no internal state: FAILURE on one tick does not prevent SUCCESS on the next."""
+        bb, node = self._make(cfg={"geofence_polygon": _G4_FENCE})
+        bb.set("band_fillable", False)
+        bb.set("current_relay_target", _G4_INSIDE)
+        assert node.update() == _F
+        bb.set("band_fillable", True)
+        assert node.update() == _S
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Gate 5: RfLinkTelemetryFresh
@@ -919,4 +930,109 @@ class TestSeveritySourceInvariant:
         result = geo_node.update()
         assert result == _F, (
             f"Stale severity should fall back to 0.5 → infeasible at D≈1000m, got {result}"
+        )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Gate 4: tree-level tests (real tree, G1–G3 passing)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_TREE_POS = {"lat": 47.39, "lon": 8.54, "alt": 0.0}
+
+# DEMO_CONFIG + geofence polygon and test overrides.  gc_pos must match _TREE_POS
+# so BatteryStillSufficientToRelay's haversine(relay_target, home_pos) returns 0m.
+_TREE_CFG = {
+    **DEMO_CONFIG,
+    "gc_pos":                        _TREE_POS,
+    "geofence_polygon":              _G4_FENCE,
+    "min_gps_fix_type":              0,
+    "recover_offboard_max_attempts": 3,
+    "debounce_n":                    3,
+    "leader_pos":                    None,   # prevent DEMO_CONFIG fallback in BandSensorNode
+}
+
+
+class TestGate4TreeLevel:
+    """
+    End-to-end tests using the real tree (build_relay_decision_tree).
+    All tests: current_role=RELAYING, G1–G3 passing.  G4 is the variable.
+
+    ADR-2 invariant: safety gates (G1–G3 → RTL) must fire before viability
+    gates (G4–G7 → EXIT_RELAY) when both would trigger on the same tick.
+    """
+
+    def _bb_relaying(self, battery_pct: float) -> tuple:
+        """
+        Returns (bb, clock) with RELAYING state, G1–G3 all passing.
+        No relay_tasking_received.leader_pos → BandSensorNode writes
+        band_fillable=False → G4 PositionServiceable will FAIL.
+        battery_pct controls whether G2 passes (≥30) or fails (<30).
+        """
+        clock = FakeClock(t=1000.0)
+        bb = TimestampedBlackboard(clock=clock.now)
+        bb.set("current_role", "RELAYING")
+        bb.set("drone_state", {
+            "battery_pct":  battery_pct,
+            "flight_mode":  "OFFBOARD",
+            "gps_fix_type": 0,
+            "position":     _TREE_POS,
+            "home_pos":     _TREE_POS,
+        })
+        bb.set("follower_severity",                  0.3)
+        bb.set("gc_severity",                        0.0)
+        bb.set("leader_severity",                    0.0)
+        bb.set("follower_snr_db_gc_to_follower",     25.0)
+        bb.set("follower_snr_db_leader_to_follower", 22.0)
+        return bb, clock
+
+    def test_g4_fires_exit_relay_not_rtl(self):
+        """
+        G1–G3 passing, band_fillable=False (no leader_pos) → G4 fires.
+        pending_proposal must be EXIT_RELAY with reason='position_infeasible'.
+        pending_command must be absent (G4 is viability, not safety — no RTL).
+        """
+        bb, clock = self._bb_relaying(battery_pct=80.0)
+        root = build_relay_decision_tree(bb, _TREE_CFG, clock=clock.now)
+        bt = py_trees.trees.BehaviourTree(root)
+        bt.setup()
+        bt.tick()
+
+        proposal = bb.get("pending_proposal")
+        assert proposal is not None, (
+            "pending_proposal not written — G4 did not fire (check G1/G2/G3 setup)"
+        )
+        assert proposal["strategy"] == "EXIT_RELAY", (
+            f"Expected EXIT_RELAY from G4, got {proposal['strategy']!r}"
+        )
+        assert proposal.get("reason") == "position_infeasible", (
+            f"Expected reason='position_infeasible' (band_fillable=False path), "
+            f"got {proposal.get('reason')!r}"
+        )
+        command = bb.get("pending_command")
+        assert command is None or command.get("command") != "RTL", (
+            f"RTL must not be issued when a viability gate (G4) fires; got {command}"
+        )
+
+    def test_g2_safety_beats_g4_viability(self):
+        """
+        G1 passing, G2 failing (battery=25% < reserve=30%) → FollowerSafetyExit(G2) fires.
+        G4 would also fail (band_fillable=False) but must not run because G2 has priority.
+        ADR-2: safety gates must take priority over viability gates.
+        """
+        bb, clock = self._bb_relaying(battery_pct=25.0)
+        root = build_relay_decision_tree(bb, _TREE_CFG, clock=clock.now)
+        bt = py_trees.trees.BehaviourTree(root)
+        bt.setup()
+        bt.tick()
+
+        command = bb.get("pending_command")
+        assert command is not None, (
+            "pending_command not written — FollowerSafetyExit(G2) did not fire"
+        )
+        assert command.get("command") == "RTL", (
+            f"Expected RTL from FollowerSafetyExit(G2), got {command.get('command')!r}"
+        )
+        proposal = bb.get("pending_proposal")
+        assert proposal is None or proposal.get("strategy") != "EXIT_RELAY", (
+            f"G4 must not have run when G2 fires first (ADR-2 safety priority): {proposal}"
         )
