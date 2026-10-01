@@ -409,8 +409,9 @@ def scenario_a(results):
     bb  = TimestampedBlackboard(clock=clock.now)
     bb.set("current_role", "IDLE")
     bb.set("relay_tasking_received", {
-        "tasking_id": "t-A001", "leader_id": LEADER_ID, "leader_pos": LEADER_POS,
+        "tasking_id": "t-A001", "leader_id": LEADER_ID,
     })
+    bb.set("leader_state", {"position": LEADER_POS, "timestamp": now})
     lh = pipe["ldr_health"].get("gc_to_leader", {"snr_db": 30.0, "severity": 0.0})
     bb.set("leader_radio_health", {**lh, "timestamp": now})
     bb.set("signal_report", {
@@ -460,8 +461,9 @@ def scenario_b(results):
     bb  = TimestampedBlackboard(clock=clock.now)
     bb.set("current_role", "RELAYING")
     bb.set("relay_tasking_received", {
-        "tasking_id": "t-B001", "leader_id": LEADER_ID, "leader_pos": LEADER_POS,
+        "tasking_id": "t-B001", "leader_id": LEADER_ID,
     })
+    bb.set("leader_state", {"position": LEADER_POS, "timestamp": now})
     bb.set("drone_state", {
         "battery_pct": 60.0, "flight_mode": "OFFBOARD", "gps_fix_type": 3,
         "position": RELAY_POS, "home_pos": GC_POS,
@@ -522,8 +524,9 @@ def scenario_c(results):
     bb  = TimestampedBlackboard(clock=clock.now)
     bb.set("current_role", "RELAYING")
     bb.set("relay_tasking_received", {
-        "tasking_id": "t-C001", "leader_id": LEADER_ID, "leader_pos": LEADER_POS,
+        "tasking_id": "t-C001", "leader_id": LEADER_ID,
     })
+    bb.set("leader_state", {"position": LEADER_POS, "timestamp": now})
     bb.set("current_relay_target", RELAY_POS)
     bb.set("drone_state", {
         "battery_pct": 60.0, "flight_mode": "OFFBOARD", "gps_fix_type": 3,
@@ -596,8 +599,9 @@ def scenario_d(results):
     bb  = TimestampedBlackboard(clock=clock.now)
     bb.set("current_role", "RELAYING")
     bb.set("relay_tasking_received", {
-        "tasking_id": "t-D001", "leader_id": LEADER_ID, "leader_pos": LEADER_POS,
+        "tasking_id": "t-D001", "leader_id": LEADER_ID,
     })
+    bb.set("leader_state", {"position": LEADER_POS, "timestamp": now})
     bb.set("drone_state", {
         "battery_pct": 60.0, "flight_mode": "OFFBOARD", "gps_fix_type": 3,
         "position": RELAY_POS, "home_pos": GC_POS,
@@ -655,8 +659,9 @@ def scenario_e(results):
     bb  = TimestampedBlackboard(clock=clock.now)
     bb.set("current_role", "RELAYING")
     bb.set("relay_tasking_received", {
-        "tasking_id": "t-E001", "leader_id": LEADER_ID, "leader_pos": LEADER_POS,
+        "tasking_id": "t-E001", "leader_id": LEADER_ID,
     })
+    bb.set("leader_state", {"position": LEADER_POS, "timestamp": now})
     bb.set("current_relay_target", RELAY_POS)
     bb.set("drone_state", {
         "battery_pct": 60.0, "flight_mode": "OFFBOARD", "gps_fix_type": 3,

@@ -42,6 +42,12 @@ The forward direction (feasible → infeasible) is measured: 2:34 delay from cro
 
 - `relay_mover.py` contains a `rate_probe` warning that fires every ~5 s during operation, logging tick-window statistics. Useful diagnostic; can be silenced in one commit if the log volume becomes a problem.
 
+## Clock synchronization assumption
+
+### Leader position age check requires synchronized clocks
+
+`BandSensorNode` computes leader position age as `self._clock() - leader_state["timestamp"]`, where `leader_state["timestamp"]` is `time.time()` stamped by `px4_agent` on the leader airframe and `self._clock()` is `time.time()` on the follower airframe. The subtraction is only meaningful if the two clocks are synchronized (e.g. GPS time or NTP). Unsynchronized clocks would make the age check unreliable: a follower whose clock runs ahead would see artificially old positions; a follower whose clock runs behind would see artificially fresh ones and fail to detect stale data.
+
 ## Not addressed
 
 ### Physical drift not detected during RELAYING

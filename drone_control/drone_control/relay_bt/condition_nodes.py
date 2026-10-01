@@ -484,13 +484,23 @@ class BandSensorNode(ConditionNodeBase):
             cfg.get("leader_radio_range_m", cfg.get("radio_range_m", 800)),
         )
 
-        tasking = self.bb.get("relay_tasking_received") or {}
-        leader_pos = (tasking.get("leader_pos")
-                      or (self.bb.get("leader_state") or {}).get("position")
-                      or cfg.get("leader_pos"))
+        leader_state = self.bb.get("leader_state") or {}
+        leader_pos = leader_state.get("position")
         if not leader_pos:
             self.bb.set("band_fillable", False)
-            return self._set(_S, "leader_pos unknown — band not computable")
+            return self._set(_S, "leader_pos unknown — no live leader_state")
+
+        max_pos_age = cfg.get("leader_position_max_age_s", 10.0)
+        origin_ts = leader_state.get("timestamp")
+        if origin_ts is None:
+            self.bb.set("band_fillable", False)
+            return self._set(_S, "leader_state has no timestamp — treated as stale")
+        pos_age = self._clock() - origin_ts
+        if pos_age > max_pos_age:
+            self.bb.set("band_fillable", False)
+            msg = (f"leader_state stale ({pos_age:.1f}s"
+                   f" > {max_pos_age}s) — band not computable")
+            return self._set(_S, msg)
 
         drone_state = self.bb.get("drone_state") or {}
         follower_pos = drone_state.get("position")

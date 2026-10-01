@@ -37,6 +37,8 @@ G1–G3 are **safety gates** — the drone is physically compromised, get it hom
 
 ### Leader tracking under changing geometry (25-min continuous run)
 
+> **Note:** this table was recorded on an earlier version of gate 8 (bucketed hash). It has not been re-run on current code.
+
 Follower re-authorization triggered by leader position changes across a diamond of 5 waypoints (240 s hold at each), holding altitude 50 m AGL:
 
 | # | Leader position | Leader d_GC | Follower position | Follower d_GC | F↔L distance | Re-auth fired |
@@ -101,7 +103,7 @@ The effective G8 tolerance is `min(tolerance_radius_m, band_width_m / 2)` — th
 - Time-based re-authorization only (fixed 5-min timer). Simple but decoupled from geometry — updates when nothing has changed and misses genuine geometry changes.
 - Separate `ProposeReposition` / `DriftedFromBand` path on G7 failure. Reposition path was unreachable once DIAG_SCAN moved G8 to run before ARBITER_SCAN (see ADR-7); removed to eliminate the dead code.
 
-**Why:** Follower motion has real cost (battery, sim time, jitter risk). Observed once during manual SITL testing on 2026-09-15, not covered by automated tests: the P1→P2 transition (leader moved ~200 m) produced no follower reposition — follower ↔ leader distance shifted from 660 m to 530 m and the relay stayed functional. The non-reposition is attributable to battery/SNR buckets remaining unchanged across P1→P2 (no new proposal published), not to position bucketing. The `input-hash dedup + geometry-capped tolerance + authorization-timer` triple is what the design converged on.
+**Why:** Follower motion has real cost (battery, sim time, jitter risk). Observed once during manual SITL testing on 2026-09-15, not covered by automated tests: the P1→P2 transition (leader moved ~200 m) produced no follower reposition — follower ↔ leader distance shifted from 660 m to 530 m and the relay stayed functional. The non-reposition is attributable to battery/SNR buckets remaining unchanged across P1→P2 (no new proposal published), not to position bucketing. The `input-hash dedup + geometry-capped tolerance + authorization-timer` triple is what the design converged on. *(Recorded on an earlier version of gate 8 (bucketed hash); to be re-run on current code.)*
 
 ### ADR-4 — PX4 params persisted via `PX4_PARAM_*` env vars, not MAVLink writes
 

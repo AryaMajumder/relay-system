@@ -746,6 +746,13 @@ class TestGate4PositionServiceable:
         bb.set("current_relay_target", _G4_OUTSIDE)
         assert node.update() == _F
 
+    def test_both_checks_pass_succeeds(self):
+        """G4: band_fillable=True (explicit) AND relay_target inside geofence → SUCCESS."""
+        bb, node = self._make(cfg={"geofence_polygon": _G4_FENCE})
+        bb.set("band_fillable", True)
+        bb.set("current_relay_target", _G4_INSIDE)
+        assert node.update() == _S
+
     def test_recovery_no_latch(self):
         """G4 has no internal state: FAILURE on one tick does not prevent SUCCESS on the next."""
         bb, node = self._make(cfg={"geofence_polygon": _G4_FENCE})
@@ -870,7 +877,7 @@ class TestSeveritySourceInvariant:
         bb.set("follower_severity", fol_sev)
         bb.set("gc_severity",       gc_sev)
         bb.set("leader_severity",   leader_sev)
-        bb.set("relay_tasking_received", {"leader_pos": _LEADER_FAR})
+        bb.set("leader_state", {"position": _LEADER_FAR, "timestamp": clock.now()})
         return bb, clock
 
     def test_infeasible_at_high_severity_matches_band_sensor(self):
@@ -922,7 +929,7 @@ class TestSeveritySourceInvariant:
         bb.set("follower_severity", 0.0)   # written at t=1000
         bb.set("gc_severity",       0.0)
         bb.set("leader_severity",   0.0)
-        bb.set("relay_tasking_received", {"leader_pos": _LEADER_FAR})
+        bb.set("leader_state", {"position": _LEADER_FAR, "timestamp": clock.now()})
         clock.advance(15.0)                # now t=1015; follower_severity is 15s old → stale
 
         # At stale_floor=0.5: eff=800*(1-0.3)=560; span=560*2*0.85=952 < 1000 → infeasible
@@ -939,6 +946,10 @@ class TestSeveritySourceInvariant:
 
 _TREE_POS = {"lat": 47.39, "lon": 8.54, "alt": 0.0}
 
+# Leader ~2,914 m north of GC — matches the 2026-09-15 SITL infeasibility run.
+# At radio_range=1500m and follower_severity=0.3: r_G+r_L = 1230+1230 = 2460 < 2914 → infeasible.
+_LEADER_SITL = {"lat": 47.41621, "lon": 8.54, "alt": 50.0}
+
 # DEMO_CONFIG + geofence polygon and test overrides.  gc_pos must match _TREE_POS
 # so BatteryStillSufficientToRelay's haversine(relay_target, home_pos) returns 0m.
 _TREE_CFG = {
@@ -948,7 +959,6 @@ _TREE_CFG = {
     "min_gps_fix_type":              0,
     "recover_offboard_max_attempts": 3,
     "debounce_n":                    3,
-    "leader_pos":                    None,   # prevent DEMO_CONFIG fallback in BandSensorNode
 }
 
 
@@ -964,8 +974,8 @@ class TestGate4TreeLevel:
     def _bb_relaying(self, battery_pct: float) -> tuple:
         """
         Returns (bb, clock) with RELAYING state, G1–G3 all passing.
-        No relay_tasking_received.leader_pos → BandSensorNode writes
-        band_fillable=False → G4 PositionServiceable will FAIL.
+        No leader_state on blackboard → BandSensorNode writes band_fillable=False
+        → G4 PositionServiceable will FAIL.
         battery_pct controls whether G2 passes (≥30) or fails (<30).
         """
         clock = FakeClock(t=1000.0)
@@ -987,7 +997,7 @@ class TestGate4TreeLevel:
 
     def test_g4_fires_exit_relay_not_rtl(self):
         """
-        G1–G3 passing, band_fillable=False (no leader_pos) → G4 fires.
+        G1–G3 passing, no leader_state → BandSensorNode writes band_fillable=False → G4 fires.
         pending_proposal must be EXIT_RELAY with reason='position_infeasible'.
         pending_command must be absent (G4 is viability, not safety — no RTL).
         """
@@ -1016,7 +1026,7 @@ class TestGate4TreeLevel:
     def test_g2_safety_beats_g4_viability(self):
         """
         G1 passing, G2 failing (battery=25% < reserve=30%) → FollowerSafetyExit(G2) fires.
-        G4 would also fail (band_fillable=False) but must not run because G2 has priority.
+        G4 would also fail (no leader_state → band_fillable=False) but must not run because G2 has priority.
         ADR-2: safety gates must take priority over viability gates.
         """
         bb, clock = self._bb_relaying(battery_pct=25.0)
@@ -1035,4 +1045,117 @@ class TestGate4TreeLevel:
         proposal = bb.get("pending_proposal")
         assert proposal is None or proposal.get("strategy") != "EXIT_RELAY", (
             f"G4 must not have run when G2 fires first (ADR-2 safety priority): {proposal}"
+        )
+
+    def test_g4_fires_exit_relay_geometry_infeasible(self):
+        """
+        G4 fires because the band geometry is genuinely infeasible, not because leader data
+        is missing.  Mirrors the 2026-09-15 SITL run: leader at ~2,914 m from GC,
+        follower_severity=0.3.  BandSensorNode computes r_G+r_L = 1230+1230 = 2460 m < 2914 m
+        → band_fillable=False.  G4 PositionServiceable fails → EXIT_RELAY proposed, no RTL.
+        """
+        bb, clock = self._bb_relaying(battery_pct=80.0)
+        bb.set("leader_state", {"position": _LEADER_SITL, "timestamp": clock.now()})
+
+        root = build_relay_decision_tree(bb, _TREE_CFG, clock=clock.now)
+        bt = py_trees.trees.BehaviourTree(root)
+        bt.setup()
+        bt.tick()
+
+        assert bb.get("band_fillable") is False, (
+            "BandSensorNode should have set band_fillable=False at 2914m with sev=0.3 "
+            "(r_G+r_L=2460 < 2914)"
+        )
+        proposal = bb.get("pending_proposal")
+        assert proposal is not None, (
+            "pending_proposal not written — G4 did not fire"
+        )
+        assert proposal["strategy"] == "EXIT_RELAY", (
+            f"Expected EXIT_RELAY from G4, got {proposal['strategy']!r}"
+        )
+        assert proposal.get("reason") == "position_infeasible", (
+            f"Expected reason='position_infeasible', got {proposal.get('reason')!r}"
+        )
+        command = bb.get("pending_command")
+        assert command is None or command.get("command") != "RTL", (
+            f"RTL must not be issued when a viability gate (G4) fires; got {command}"
+        )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# BandSensorNode — leader position freshness
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_POS_FRESH_CFG = {
+    **_SEV_CFG,
+    "leader_position_max_age_s": 10.0,
+}
+
+
+class TestBandSensorNodePositionFreshness:
+    """
+    BandSensorNode must age-check the origin FCU timestamp on leader_state, not
+    the blackboard-receive timestamp (which state_bridge refreshes every 1 s even
+    when the FCU is silent).  Config key: leader_position_max_age_s (default 10.0).
+    """
+
+    def _make(self, cfg=None):
+        clock = FakeClock(t=1000.0)
+        bb = TimestampedBlackboard(clock=clock.now)
+        bb.set("follower_severity", 0.0)
+        bb.set("gc_severity",       0.0)
+        bb.set("leader_severity",   0.0)
+        node = BandSensorNode(bb=bb, config=cfg or _POS_FRESH_CFG, clock=clock.now)
+        return bb, clock, node
+
+    def test_fresh_position_computes_normally(self):
+        """Origin timestamp 5 s old (< 10 s limit) — band computes, band_fillable=True."""
+        bb, clock, node = self._make()
+        bb.set("leader_state", {
+            "position":  _LEADER_FAR,
+            "timestamp": clock.now() - 5.0,
+        })
+        node.update()
+        assert bb.get("band_fillable") is True, (
+            "Fresh position (5s < 10s limit) should compute normally"
+        )
+
+    def test_stale_position_sets_band_fillable_false(self):
+        """Origin timestamp 15 s old (> 10 s limit) — band_fillable=False."""
+        bb, clock, node = self._make()
+        bb.set("leader_state", {
+            "position":  _LEADER_FAR,
+            "timestamp": clock.now() - 15.0,
+        })
+        node.update()
+        assert bb.get("band_fillable") is False, (
+            "Stale position (15s > 10s limit) must set band_fillable=False"
+        )
+
+    def test_stale_then_fresh_recovers(self):
+        """Tick 1 stale → False; tick 2 fresh → True (no latch)."""
+        bb, clock, node = self._make()
+        bb.set("leader_state", {
+            "position":  _LEADER_FAR,
+            "timestamp": clock.now() - 15.0,
+        })
+        node.update()
+        assert bb.get("band_fillable") is False
+
+        bb.set("leader_state", {
+            "position":  _LEADER_FAR,
+            "timestamp": clock.now() - 5.0,
+        })
+        node.update()
+        assert bb.get("band_fillable") is True, (
+            "After stale→fresh, band_fillable must recover on the next tick"
+        )
+
+    def test_no_timestamp_treated_as_stale(self):
+        """A payload without a timestamp field is fail-closed: band_fillable=False."""
+        bb, clock, node = self._make()
+        bb.set("leader_state", {"position": _LEADER_FAR})   # no "timestamp" key
+        node.update()
+        assert bb.get("band_fillable") is False, (
+            "Missing timestamp must be treated as stale (fail-closed)"
         )
