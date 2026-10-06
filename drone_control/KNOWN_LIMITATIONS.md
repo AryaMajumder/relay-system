@@ -58,3 +58,13 @@ The forward direction (feasible → infeasible) is measured: 2:34 delay from cro
 - Ground station UI (drone position map with GC and follower markers is provided as a local Leaflet dashboard and a Foxglove Studio bridge, but these are operator-side visualizations, not a real GC).
 - Encrypted MQTT (`telemetry_enc` topics carry base64-wrapped payloads but do not integrate a real key management path).
 - Battery / cruise-speed airframe constants (`consumption_rate_pct_per_s`, `cruise_speed_mps`) carry arbitrary placeholder values in `config/demo_config.py`'s `DRONE_MODELS["generic"]` section — 0.05 %/s and 12.0 m/s. The `_Unresolved` sentinel machinery (`config/demo_config.py`) remains available: replace either value with `_Unresolved("...")` and any arithmetic on it raises `RuntimeError` at the point of use, preventing silent bad answers. Deliberately arbitrary; tune to the actual airframe before flying.
+
+## Issue A — Silent cross-enclave DDS match loss (observed 2026-10-01)
+
+**One-time observation (2026-10-01 15:11:32 PDT):** both drone-02 subscribers (`capability_assessor_drone_02`, `relay_strategy_evaluator_drone_02`) stopped receiving `/relay_tasking` from the gc-enclave `relay_decision_authority` publisher simultaneously. Publisher continued publishing without pause; subscribers were still alive and ticking. The match never auto-recovered until the subscribers were restarted ~6 h later.
+
+**What was ruled out from log evidence:** no RDA restart, no SROS2/security errors, no application-level log on either side, no ghost publisher (the ~100 received-only round_ids were journal-rotation artifacts, not a second publisher — the test harness was ruled out separately). No test-harness injection either.
+
+**Cause unconfirmed** — the symptom is consistent with CycloneDDS participant liveliness-lease expiry under a transient GC pause or scheduling stall, but the default Cyclone config emits no logs that would distinguish that from a loopback-socket drop.
+
+**Mitigation now active:** CycloneDDS tracing enabled at `fine` verbosity, writing to `/var/log/cyclonedds/cyclonedds.log` with 200MB rotation (see `/etc/ros/cyclonedds.xml` and `/etc/logrotate.d/cyclonedds`). Any recurrence will be captured. No code-level mitigation added yet — a decision between application-layer heartbeats vs. transport-level liveliness tuning is pending repro + trace evidence.
