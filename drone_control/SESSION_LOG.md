@@ -5732,3 +5732,21 @@ If either is false, clear `_rebroadcast_at` and log the suppression reason. A fr
 **Why DEVIATION:** §4.10 ring-buffers alert_intents for observability only; the comment explicitly says "No control loop consumes this." The fix adds one control-loop consequence: dropping the auth cache entry. The ring buffer is unchanged.
 
 **Test:** `test_safety_exit_clears_active_auth` in wave7_relay_decision_authority.
+
+---
+
+## [2026-10-06] DEVIATION — RELAYING_BRANCH incumbent bid
+
+**Problem:** `tree_builder.py` ended the RELAYING_BRANCH's ARBITER_SCAN with `_succeed("CONTINUE")`, meaning the incumbent follower wrote no `pending_proposal` on the happy path. In practice this meant: reauth rounds (started by `relay_decision_authority` on authorization expiry or `reeval_trigger`) saw no proposal from the incumbent. Combined with the (now-fixed) `relay_strategy_evaluator` synth-decline, incumbents were kicked off their own slot every ~1–2 rounds.
+
+**Decision:** Add `ProposeIncumbentContinuousRelay` as the new terminal child of ARBITER_SCAN. When all G1–G7 pass, it reads `current_relay_target` (written by `capability_assessor` on `relay_assignment` arrival) and writes a `CONTINUOUS_RELAY` `pending_proposal` for that live target. Cost's `eta_seconds` is derived from distance via `_cost_from_target`.
+
+**Why DEVIATION:** BUILDSPEC §4.7 doesn't specify an incumbent-bid node — it describes the gate-structure of ARBITER_SCAN but is silent on the fallthrough action. The AlwaysSucceed was consistent with "no action when all gates pass" but produced the behavioral problem described above.
+
+**Interaction with the gating fix (2026-10-04):** With the rebroadcast gate stopping redundant rounds when a live auth is active, incumbent bids are published only on rounds that actually require a reauth (reauth trigger from `reeval_trigger` or authorization expiry).
+
+**No-op path:** if `current_relay_target` is unset (follower just entered RELAYING with no assignment yet), the node writes no proposal and still returns SUCCESS. The RELAYING_BRANCH's outer Sequence completes and streaming to the authorized target continues.
+
+**Tests:** `TestProposeIncumbentContinuousRelay` (4 cases) in `test_wave5_action_nodes.py`. Suite 361 → 365.
+
+**Commit:** 85c8e2f.
