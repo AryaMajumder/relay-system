@@ -81,18 +81,16 @@ class _StrategyEvaluatorCore:
     def on_capability_report(self, report: dict) -> None:
         pending = report.get("pending_proposal")
 
-        # No pending_proposal means the BT failed before reaching any Propose*
-        # node (e.g. RelayRequestReceived failed because the drone missed the
-        # relay_tasking). If a round is active the drone is still implicitly
-        # INCAPABLE — synthesize a decline so the RDA window can open and
-        # eventually schedule a rebroadcast.
+        # SESSION_LOG 2026-10-05: no synthesis fallback. If the BT didn't
+        # write a pending_proposal, send nothing. The decline path lives in
+        # the BT itself (ProposeLetLeaderIsolate after capability failure in
+        # IDLE_BRANCH). Previously, this file synthesized LET_LEADER_ISOLATE
+        # whenever pending_proposal was absent, which falsely declared a
+        # HAPPILY-RELAYING follower "incapable" on every tick during RELAYING
+        # and spammed RDA with declines even after a legitimate CONTINUOUS_RELAY
+        # authorization was in flight.
         if not pending:
-            if self._round_id is None:
-                return
-            pending = {
-                "strategy": "LET_LEADER_ISOLATE",
-                "reason":   "incapable — no pending_proposal from BT",
-            }
+            return
 
         strategy = pending.get("strategy", "UNKNOWN")
         inputs   = report.get("inputs", {})

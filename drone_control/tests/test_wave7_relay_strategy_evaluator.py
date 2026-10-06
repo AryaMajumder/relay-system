@@ -335,3 +335,50 @@ class TestCapabilitySnapshotSchema:
         tc = pub[0].get("trigger_context", {})
         for field in ("gate_fired", "reason", "source"):
             assert field in tc, f"trigger_context missing '{field}'"
+
+
+# ── 2026-10-05: no evaluator-side synthesis of LET_LEADER_ISOLATE ────────────
+
+class TestNoSynthesizedDecline:
+    """
+    Removed behavior: evaluator used to synthesize LET_LEADER_ISOLATE when the
+    BT wrote no pending_proposal. That falsely declared a RELAYING follower
+    "incapable" every tick. Decline path now lives exclusively in the BT
+    (ProposeLetLeaderIsolate in IDLE_BRANCH).
+    """
+
+    def test_real_decline_from_bt_still_published(self):
+        """Capability-failure path in IDLE: BT writes a LET_LEADER_ISOLATE
+        pending_proposal with reason — evaluator must publish it verbatim."""
+        core, pub, _ = _make_core()
+        core.on_relay_tasking({"round_id": "r1"})
+        report = _make_report(
+            strategy="LET_LEADER_ISOLATE",
+            reason="battery_too_low",
+            band_sensor_pass=False,
+        )
+        core.on_capability_report(report)
+        assert len(pub) == 1, "A BT-written decline must still be published"
+        assert pub[0]["strategy"] == "LET_LEADER_ISOLATE"
+        assert pub[0]["trigger_context"]["reason"] == "battery_too_low"
+
+    def test_relaying_follower_no_pending_proposal_sends_nothing(self):
+        """RELAYING follower whose BT ran all gates to success (no
+        pending_proposal written) must NOT get a synthesized decline."""
+        core, pub, _ = _make_core()
+        core.on_relay_tasking({"round_id": "r1"})     # active round
+        report = _make_report()                        # populated by helper
+        report.pop("pending_proposal", None)           # BT wrote nothing
+        core.on_capability_report(report)
+        assert len(pub) == 0, (
+            "Evaluator must send nothing when pending_proposal is absent; "
+            "the follower is not implicitly INCAPABLE."
+        )
+
+    def test_no_pending_proposal_with_no_active_round_still_nothing(self):
+        """Pre-existing early return: no round + no pending_proposal → silent."""
+        core, pub, _ = _make_core()
+        report = _make_report()
+        report.pop("pending_proposal", None)
+        core.on_capability_report(report)
+        assert len(pub) == 0
