@@ -17,6 +17,7 @@ Hard rules this file must satisfy (BUILDSPEC §4.7 / §5.5):
 """
 
 import logging
+import re
 import time
 import uuid
 
@@ -281,10 +282,19 @@ class FollowerSafetyExit(ActionNodeBase):
         return self._set(py_trees.common.Status.SUCCESS, f"RTL commanded: {reason}")
 
 
+_EXIT_GATE_RE = re.compile(r"\(([^)]+)\)\s*$")
+
+
 class ProposeExitRelay(ActionNodeBase):
     """
     Proposes exit with diagnostic context; the GC decides next action.
-    Reason is inferred from blackboard state at fire time.
+
+    Gate attribution: the tree builder names each ProposeExitRelay instance
+    with its gate in parentheses (e.g. "ProposeExitRelay(G4)",
+    "ProposeExitRelay(ReauthTimeout)"). We extract that from self.name so
+    both the log line and the proposal's trigger_context carry the actual
+    gate that fired — not an inference from blackboard state (which can
+    disagree, especially for G5 and REAUTH_TIMEOUT).
     """
 
     def update(self) -> py_trees.common.Status:
@@ -293,20 +303,23 @@ class ProposeExitRelay(ActionNodeBase):
         threshold = self.config.get("relay_exit_quality_threshold", 0.85)
 
         if direct_quality is not None and direct_quality >= threshold:
-            reason, trigger = "direct_link_recovered", "gate_6"
+            reason = "direct_link_recovered"
         elif band_fillable is False:
-            reason, trigger = "position_infeasible", "gate_4"
+            reason = "position_infeasible"
         else:
-            reason, trigger = "link_ineffective", "gate_7"
+            reason = "link_ineffective"
+
+        gate_match = _EXIT_GATE_RE.search(self.name or "")
+        gate = gate_match.group(1) if gate_match else "unknown"
 
         proposal = {
             "proposal_id": self.proposal_id,
             "timestamp":   time.time(),
             "strategy":    "EXIT_RELAY",
             "reason":      reason,
-            "trigger":     trigger,
+            "trigger":     gate,
         }
         self.bb.set("pending_proposal", proposal)
-        log.info("[ProposeExitRelay] EXIT_RELAY: reason=%s trigger=%s", reason, trigger)
+        log.info("[ProposeExitRelay] EXIT_RELAY: gate=%s reason=%s", gate, reason)
         return self._set(py_trees.common.Status.SUCCESS,
-                         f"EXIT_RELAY proposed: {reason} via {trigger}")
+                         f"EXIT_RELAY proposed: gate={gate} reason={reason}")
