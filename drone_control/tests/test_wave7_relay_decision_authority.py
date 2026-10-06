@@ -525,6 +525,53 @@ class TestRebroadcastGatedByLinkAndAuth:
         core.check_timers()
         assert len(tasking) >= 2, "Expired auth must not block rebroadcast"
 
+    def test_safety_exit_clears_active_auth(self):
+        """
+        FOLLOWER_SAFETY_EXIT alert must clear the drone from _active_auths so
+        that rebroadcast gating does not block new rounds while the follower
+        is RTL'ing home. SESSION_LOG 2026-10-05 DEVIATION fix.
+        """
+        core, tasking, auth, clock = _make_core()
+        core.on_gc_link_quality({"quality": 0.2})
+        round_id = core._current_round_id
+        core.on_strategy_proposal(_make_proposal(drone_id="drone-02", round_id=round_id))
+        clock.advance(50); core.check_timers()
+        assert "drone-02" in core._active_auths, "Precondition: auth is recorded"
+
+        core.on_alert_intent({
+            "drone_id":    "drone-02",
+            "type":        "FOLLOWER_SAFETY_EXIT",
+            "reason":      "offboard_unrecoverable",
+            "battery_pct": 85,
+        })
+        assert "drone-02" not in core._active_auths, (
+            "FOLLOWER_SAFETY_EXIT must drop the drone from _active_auths"
+        )
+
+        # And a subsequent rebroadcast must now fire (link still degraded, no active auth).
+        clock.advance(200); core.check_timers()
+        assert len(tasking) >= 2, (
+            "Rebroadcast must fire after safety exit clears the auth"
+        )
+
+    def test_alert_intent_without_safety_exit_does_not_clear(self):
+        """Only FOLLOWER_SAFETY_EXIT clears; other alert types leave auths alone."""
+        core, tasking, auth, clock = _make_core()
+        core.on_gc_link_quality({"quality": 0.2})
+        round_id = core._current_round_id
+        core.on_strategy_proposal(_make_proposal(drone_id="drone-02", round_id=round_id))
+        clock.advance(50); core.check_timers()
+        assert "drone-02" in core._active_auths
+
+        core.on_alert_intent({
+            "drone_id": "drone-02",
+            "type":     "SOMETHING_ELSE",
+            "reason":   "diagnostic",
+        })
+        assert "drone-02" in core._active_auths, (
+            "Non-safety alerts must not clear the auth"
+        )
+
     def test_exit_relay_does_not_count_as_active_auth(self):
         """EXIT_RELAY authorization is terminal — must NOT suppress rebroadcast."""
         core, tasking, auth, clock = _make_core()

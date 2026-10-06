@@ -234,6 +234,15 @@ class _DecisionCore:
             f"battery={payload.get('battery_pct', '?')}"
         )
 
+        # SESSION_LOG 2026-10-05 DEVIATION fix: FollowerSafetyExit (G1/G2/G3)
+        # takes the follower out of RELAYING without going through RDA, so no
+        # EXIT_RELAY authorization clears _active_auths. Without this, GC would
+        # suppress rebroadcasts for the full authorization_validity_s window
+        # while the follower is RTL'ing home.
+        if payload.get("type") == "FOLLOWER_SAFETY_EXIT" and drone_id in self._active_auths:
+            self._active_auths.pop(drone_id, None)
+            self._log(f"Dropped active_auth for {drone_id} on FOLLOWER_SAFETY_EXIT")
+
     def on_strategy_proposal(self, payload: dict) -> None:
         """
         Receive a strategy_proposal from a follower.
