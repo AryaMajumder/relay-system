@@ -282,6 +282,62 @@ class FollowerSafetyExit(ActionNodeBase):
         return self._set(py_trees.common.Status.SUCCESS, f"RTL commanded: {reason}")
 
 
+class ProposeIncumbentContinuousRelay(ActionNodeBase):
+    """
+    RELAYING-branch terminal: when all G1-G7 gates pass, the incumbent
+    bids CONTINUOUS_RELAY for its live authorized relay point so that a
+    reauth round can renew the incumbent instead of winning on EXIT_RELAY
+    gate flaps.
+
+    Reads current_relay_target (written by capability_assessor on
+    relay_assignment arrival). If absent (e.g. the follower just entered
+    RELAYING without having an assignment on the blackboard yet), this
+    node writes no proposal and returns SUCCESS — the ARBITER_SCAN
+    terminal must always succeed so RELAYING_BRANCH's outer Sequence
+    completes and the follower keeps streaming to its target.
+
+    SESSION_LOG 2026-10-06 DEVIATION — the pre-existing terminal was an
+    AlwaysSucceed, meaning the incumbent submitted nothing on a reauth
+    round's happy path. See the entry for discussion.
+    """
+
+    def update(self) -> py_trees.common.Status:
+        R_target = self.bb.get("current_relay_target")
+        if not R_target:
+            # No live assignment to bid — leave pending_proposal untouched.
+            # ARBITER_SCAN still returns SUCCESS so RELAYING_BRANCH continues.
+            return self._set(py_trees.common.Status.SUCCESS,
+                             "no current_relay_target — no incumbent bid")
+
+        cost = _cost_from_target(self.bb, self.config, R_target)
+        drone_state = self.bb.get("drone_state") or {}
+        follower_id = drone_state.get("drone_id") or self.config.get("drone_id", "drone-02")
+
+        proposal = {
+            "proposal_id":    self.proposal_id,
+            "timestamp":      time.time(),
+            "strategy":       "CONTINUOUS_RELAY",
+            "relay_position": R_target,
+            "reason":         "incumbent_bid",
+            "trigger":        "incumbent",
+            "cost": {
+                "follower_id":      follower_id,
+                "battery_cost_pct": cost["battery_cost_pct"],
+                "repositioning_m":  cost["repositioning_m"],
+                "eta_seconds":      cost["eta_seconds"],
+            },
+        }
+        self.bb.set("pending_proposal", proposal)
+        log.info(
+            "[ProposeIncumbentContinuousRelay] incumbent bid for current target "
+            "(%.5f,%.5f) eta=%.0fs",
+            R_target.get("lat", 0.0), R_target.get("lon", 0.0),
+            cost["eta_seconds"],
+        )
+        return self._set(py_trees.common.Status.SUCCESS,
+                         f"incumbent CONTINUOUS_RELAY bid, eta {cost['eta_seconds']:.0f}s")
+
+
 _EXIT_GATE_RE = re.compile(r"\(([^)]+)\)\s*$")
 
 

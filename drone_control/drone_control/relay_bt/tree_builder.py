@@ -93,6 +93,7 @@ from .action_nodes import (
     ProposeLetLeaderIsolate,
     FollowerSafetyExit,
     ProposeExitRelay,
+    ProposeIncumbentContinuousRelay,
 )
 
 log = logging.getLogger(__name__)
@@ -209,8 +210,12 @@ def build_relay_decision_tree(bb: TimestampedBlackboard,
              _inv(_n(ReauthResponseTimedOut)),
              _n(ProposeExitRelay, name="ProposeExitRelay(ReauthTimeout)"),
         ),
-        # All gates passed — continue relaying
-        _succeed("CONTINUE"),
+        # All gates passed — incumbent bid for the live authorized target.
+        # (Previously _succeed("CONTINUE") — the incumbent then submitted
+        # nothing on reauth rounds, which combined with the evaluator's
+        # synth-decline bug caused incumbents to lose their slot every
+        # round. See SESSION_LOG 2026-10-06.)
+        _n(ProposeIncumbentContinuousRelay, name="ProposeIncumbentContinuousRelay"),
     )
 
     relaying_branch = _seq("RELAYING_BRANCH",
