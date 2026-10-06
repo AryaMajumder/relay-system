@@ -2,7 +2,7 @@
 
 ## SESSION LOG (mandatory, no prompting required)
 
-The session log lives at `/root/SESSION_LOG.md`. The protocol is at `/root/SESSION_LOG_PROTOCOL.md`.
+The session log lives at `drone_control/SESSION_LOG.md` (relative to the repo root at `/root/relay-system/`). The protocol is at `/root/SESSION_LOG_PROTOCOL.md`.
 
 **Log entries must be written automatically** — do not wait to be asked. Write an entry immediately when any of these occur:
 
