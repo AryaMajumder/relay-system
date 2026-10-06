@@ -456,7 +456,92 @@ class TestPostAuthorizationRebroadcast:
         # After rebroadcast_pause_s (120s from authorization): new broadcast.
         clock.advance(25)  # 50 + 100 + 25 = 175 > 45 + 120
         core.check_timers()
-        assert len(tasking) == 2, "Should have rebroadcast after post-auth pause"
+        # With the 2026-10-04 rebroadcast-gating fix, a valid CONTINUOUS_RELAY
+        # authorization suppresses rebroadcast — so no new broadcast here.
+        # The explicit-regression / recovery cases are covered by
+        # TestRebroadcastGatedByLinkAndAuth below.
+        assert len(tasking) == 1, (
+            "Rebroadcast suppressed while an active authorization is outstanding"
+        )
+
+
+# ── 2026-10-04 DEVIATION fix: rebroadcast must stop on link recovery or active auth ──
+
+class TestRebroadcastGatedByLinkAndAuth:
+    """
+    Baseline (before fix): once _rebroadcast_at was primed, check_timers fired
+    a new round every rebroadcast_pause_s FOREVER, independent of link state
+    and of whether anyone was already serving a relay.
+
+    New rule (SESSION_LOG 2026-10-04): check_timers only rebroadcasts when
+    GC link is still degraded AND no follower currently holds a valid auth.
+    """
+
+    def test_link_recovered_no_rebroadcast(self):
+        """Link quality back above trigger → _rebroadcast_at is cleared, no new broadcast."""
+        core, tasking, auth, clock = _make_core()
+        core.on_gc_link_quality({"quality": 0.2})          # drop → round 1
+        clock.advance(50); core.check_timers()             # window times out empty
+        assert core._rebroadcast_at is not None
+
+        core.on_gc_link_quality({"quality": 0.9})          # link recovered
+        clock.advance(200); core.check_timers()            # well past pause
+        assert len(tasking) == 1, "Rebroadcast must be suppressed after recovery"
+        assert core._rebroadcast_at is None, "_rebroadcast_at must be cleared"
+
+    def test_active_authorization_no_rebroadcast(self):
+        """Valid CONTINUOUS_RELAY auth outstanding → no rebroadcast fires."""
+        core, tasking, auth, clock = _make_core()
+        core.on_gc_link_quality({"quality": 0.2})
+        round_id = core._current_round_id
+        core.on_strategy_proposal(_make_proposal(drone_id="drone-02", round_id=round_id))
+        clock.advance(50); core.check_timers()             # grants authorization
+        assert len(auth) == 1
+
+        clock.advance(200); core.check_timers()            # past post-auth pause
+        assert len(tasking) == 1, "Rebroadcast must be suppressed while auth is active"
+        assert core._rebroadcast_at is None
+
+    def test_degraded_and_no_auth_rebroadcasts(self):
+        """Regression: link still bad, no active auth → rebroadcast fires as before."""
+        core, tasking, auth, clock = _make_core()
+        core.on_gc_link_quality({"quality": 0.2})          # degraded
+        clock.advance(50); core.check_timers()             # empty window closes
+        clock.advance(125); core.check_timers()            # past rebroadcast pause
+        assert len(tasking) == 2, "Must still rebroadcast when conditions require it"
+
+    def test_expired_authorization_allows_rebroadcast(self):
+        """Auth past valid_until → pruned → rebroadcast can fire again."""
+        core, tasking, auth, clock = _make_core()
+        core.on_gc_link_quality({"quality": 0.2})
+        round_id = core._current_round_id
+        core.on_strategy_proposal(_make_proposal(drone_id="drone-02", round_id=round_id))
+        clock.advance(50); core.check_timers()             # grant
+        assert len(auth) == 1
+
+        # Advance past authorization_validity_s (default 1800) + pause.
+        clock.advance(_CFG.get("authorization_validity_s", 1800) + 150)
+        core.on_gc_link_quality({"quality": 0.2})          # still degraded
+        core.check_timers()
+        assert len(tasking) >= 2, "Expired auth must not block rebroadcast"
+
+    def test_exit_relay_does_not_count_as_active_auth(self):
+        """EXIT_RELAY authorization is terminal — must NOT suppress rebroadcast."""
+        core, tasking, auth, clock = _make_core()
+        core.on_gc_link_quality({"quality": 0.2})
+        round_id = core._current_round_id
+        # EXIT_RELAY proposals produce an exit authorization in the ranking path
+        # when they are the only proposal present. Simulate by directly granting
+        # via the normal ranking flow with an EXIT proposal.
+        exit_prop = _make_proposal(drone_id="drone-02", round_id=round_id)
+        exit_prop["strategy"] = "EXIT_RELAY"
+        core.on_strategy_proposal(exit_prop)
+        clock.advance(50); core.check_timers()
+        # Whether an authorization was granted or not for EXIT, the invariant
+        # the fix guarantees is: no entry sits in _active_auths for EXIT.
+        assert "drone-02" not in core._active_auths, (
+            "EXIT_RELAY must not leave a drone recorded as actively serving"
+        )
 
 
 # ── §4.10: winner comparison ──────────────────────────────────────────────────

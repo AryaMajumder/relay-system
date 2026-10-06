@@ -101,6 +101,13 @@ class _DecisionCore:
         # Disarmed: round already in flight; re-arm when quality recovers.
         self._armed: bool = True
 
+        # ── Rebroadcast gating state (SESSION_LOG 2026-10-04 DEVIATION fix) ──
+        # The rebroadcast chain previously ran forever once primed. It now
+        # fires only if GC link is still degraded AND no follower holds a
+        # valid authorization. See check_timers.
+        self._last_gc_quality: float | None = None
+        self._active_auths:    dict         = {}   # drone_id → valid_until
+
         # ── Dedup table 1 — relay_request ─────────────────────────────────────
         # Key: (drone_id, snr_bucket). Expiry: relay_request_dedup_expiry_s (600s).
         # Purpose: suppress repeated LOGGING of one continuous degradation episode.
@@ -136,6 +143,7 @@ class _DecisionCore:
         quality = payload.get("quality")
         if quality is None:
             return
+        self._last_gc_quality = quality
 
         if quality >= _GC_QUALITY_TRIGGER:
             # Link acceptable; re-arm so next drop fires.
@@ -320,10 +328,33 @@ class _DecisionCore:
                 self._close_window()
 
         # Rebroadcast deadline.
+        # SESSION_LOG 2026-10-04 DEVIATION fix: the rebroadcast chain used to
+        # run forever once primed, regardless of whether anyone still needed a
+        # relay. Now it fires only if (a) GC link is still degraded AND
+        # (b) no follower currently holds a valid authorization. Otherwise
+        # the deadline is cleared — a fresh degradation drop will re-prime it.
         if self._rebroadcast_at is not None and now >= self._rebroadcast_at:
-            self._rebroadcast_at = None
-            self._log("Rebroadcast pause elapsed — starting new broadcast round")
-            self._start_round("initial")
+            # Prune expired authorizations.
+            self._active_auths = {
+                did: vu for did, vu in self._active_auths.items() if vu > now
+            }
+            link_degraded = (
+                self._last_gc_quality is not None
+                and self._last_gc_quality < _GC_QUALITY_TRIGGER
+            )
+            has_active_auth = bool(self._active_auths)
+
+            if link_degraded and not has_active_auth:
+                self._rebroadcast_at = None
+                self._log("Rebroadcast pause elapsed — starting new broadcast round")
+                self._start_round("initial")
+            else:
+                self._rebroadcast_at = None
+                reason = (
+                    "link recovered" if not link_degraded
+                    else f"active auth(s) outstanding: {sorted(self._active_auths)}"
+                )
+                self._log(f"Rebroadcast suppressed — {reason}")
 
     # ── Round management ─────────────────────────────────────────────────────
 
@@ -443,6 +474,13 @@ class _DecisionCore:
 
         drone_id = winner.get("drone_id", "unknown")
         self._publish_auth(drone_id, authorization)
+
+        # Track active auths for rebroadcast gating. EXIT_RELAY terminates the
+        # relay role so does not count as "actively serving".
+        if authorization["strategy"] in ("CONTINUOUS_RELAY", "CHAIN_RELAY"):
+            self._active_auths[drone_id] = authorization["valid_until"]
+        else:
+            self._active_auths.pop(drone_id, None)
         self._log(
             f"Authorization granted: drone={drone_id} "
             f"strategy={authorization['strategy']} "
