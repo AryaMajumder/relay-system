@@ -921,8 +921,16 @@ class TestSeveritySourceInvariant:
     def test_stale_severity_falls_back_to_floor(self):
         """
         follower_severity written 15s ago (> max_age=10s) → stale.
-        _follower_severity falls back to stale_severity_floor=0.5.
-        GeometryFeasible must use 0.5, not 0.0.
+        BandSensorNode falls back to stale_severity_floor=0.5 and that
+        value is reflected in band_r_G / band_r_L. GeometryFeasible then
+        mirrors BandSensorNode's band_fillable verdict (post-2026-10-06
+        correction — see SESSION_LOG).
+
+        At D≈1000m and stale_floor=0.5: cap_fol=cap_gc=cap_ldr=800;
+        r_G=r_L=800*(1-0.5*0.6)=560; r_G+r_L=1120 ≥ 1000 → still fillable.
+        We assert that the stale-floor value (560) is what BandSensorNode
+        wrote, not the fresh-at-0.0 value (800), which is the actual
+        'floor was applied' invariant.
         """
         clock = FakeClock(t=1000.0)
         bb = _bb(clock)
@@ -931,12 +939,24 @@ class TestSeveritySourceInvariant:
         bb.set("leader_severity",   0.0)
         bb.set("leader_state", {"position": _LEADER_FAR, "timestamp": clock.now()})
         clock.advance(15.0)                # now t=1015; follower_severity is 15s old → stale
+        # Refresh leader_state so the leader-position freshness guard doesn't
+        # short-circuit BandSensorNode; we're specifically exercising stale
+        # SEVERITY handling here, not stale LEADER POSITION.
+        bb.set("leader_state", {"position": _LEADER_FAR, "timestamp": clock.now()})
 
-        # At stale_floor=0.5: eff=800*(1-0.3)=560; span=560*2*0.85=952 < 1000 → infeasible
+        band_node = BandSensorNode(bb=bb, config=_SEV_CFG, clock=clock.now)
+        band_node.update()
+        r_G = bb.get("band_r_G")
+        assert 550 <= r_G <= 570, (
+            f"BandSensorNode should apply stale_severity_floor=0.5 → "
+            f"r_G ≈ 800*(1-0.3) = 560, got {r_G}"
+        )
+
         geo_node = GeometryFeasible(bb=bb, config=_SEV_CFG, clock=clock.now)
         result = geo_node.update()
-        assert result == _F, (
-            f"Stale severity should fall back to 0.5 → infeasible at D≈1000m, got {result}"
+        assert result == _S, (
+            f"GeometryFeasible must agree with BandSensorNode: at D≈1000m, "
+            f"stale sev→0.5 gives r_G+r_L=1120 ≥ 1000 → fillable; got {result}"
         )
 
 
@@ -1158,4 +1178,107 @@ class TestBandSensorNodePositionFreshness:
         node.update()
         assert bb.get("band_fillable") is False, (
             "Missing timestamp must be treated as stale (fail-closed)"
+        )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# GeometryFeasible / BandSensorNode agreement invariant (2026-10-06)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestGeometryFeasibleBandSensorInvariant:
+    """
+    For ANY blackboard inputs, GeometryFeasible's result must match the
+    band_fillable flag written by BandSensorNode. Prior to 2026-10-06 the
+    two used different formulas (follower_severity + 0.85 margin vs
+    gc_severity + leader_severity + follower_severity + strict band check),
+    so GeometryFeasible would pass in FULL_ENTRY while BandSensorNode wrote
+    fillable=False and R_target was never produced — ProposeContinuousRelay
+    silently failed and the decline reported no_strategy. See SESSION_LOG.
+    """
+
+    def _env(self, D_target, fol_sev=0.0, gc_sev=0.0, leader_sev=0.0):
+        clock = FakeClock(t=1000.0)
+        bb = _bb(clock)
+        bb.set("follower_severity", fol_sev)
+        bb.set("gc_severity",       gc_sev)
+        bb.set("leader_severity",   leader_sev)
+        # Build a leader_pos at D_target metres due north of GC.
+        # 1 deg lat ≈ 111_320 m.
+        lat = _GC_POS["lat"] + (D_target / 111_320.0)
+        bb.set("leader_state", {
+            "position":  {"lat": lat, "lon": _GC_POS["lon"], "alt": 50.0},
+            "timestamp": clock.now(),
+        })
+        return bb, clock
+
+    def _check(self, bb, clock):
+        band = BandSensorNode(bb=bb, config=_SEV_CFG, clock=clock.now)
+        band.update()
+        geo  = GeometryFeasible(bb=bb, config=_SEV_CFG, clock=clock.now)
+        geo_result = geo.update()
+        expected = _S if bb.get("band_fillable") else _F
+        return bb.get("band_fillable"), geo_result, expected
+
+    @pytest.mark.parametrize("D, fol_sev", [
+        ( 500, 0.0), ( 500, 0.7),
+        (1000, 0.0), (1000, 0.7),
+        (1400, 0.0), (1400, 0.7),
+        (1600, 0.0), (1600, 0.3),
+    ])
+    def test_geometry_feasible_matches_band_fillable(self, D, fol_sev):
+        """Across a grid of D and follower_severity, verdicts must agree."""
+        bb, clock = self._env(D_target=D, fol_sev=fol_sev)
+        fillable, geo_result, expected = self._check(bb, clock)
+        assert geo_result == expected, (
+            f"disagreement at D={D}, fol_sev={fol_sev}: "
+            f"band_fillable={fillable} but GeometryFeasible={geo_result}"
+        )
+
+    def test_capfail_names_geometry_feasible_when_band_infeasible(self):
+        """
+        End-to-end: with band infeasible, decline reason must be
+        'GeometryFeasible' (CapFail path), not 'no_strategy'.
+        """
+        clock = FakeClock(t=1000.0)
+        bb = TimestampedBlackboard(clock=clock.now)
+        bb.set("current_role", "OPEN_TO_RELAY")
+        bb.set("drone_state", {
+            "battery_pct":  80.0,
+            "flight_mode":  "AUTO.LOITER",
+            "gps_fix_type": 3,
+            "position":     dict(_GC_POS),
+            "home_pos":     dict(_GC_POS),
+            "timestamp":    clock.now(),
+        })
+        # Enough severity to infeasibilise the band at this D.
+        bb.set("follower_severity", 0.7)
+        bb.set("gc_severity",       0.7)
+        bb.set("leader_severity",   0.7)
+        bb.set("follower_snr_db_gc_to_follower",     20.0)
+        bb.set("follower_snr_db_leader_to_follower", 20.0)
+        # Push the leader well beyond r_G+r_L so the band is clearly infeasible
+        # under DEMO_CONFIG radio_range_m=1500 and severities 0.7 all around:
+        #   cap_gc = cap_ldr = 1500*(1-0.42) = 870
+        #   r_G = r_L = 870*(1-0.42) = 505   (sum 1010)
+        #   D must exceed 1010.
+        far_leader = {"lat": _GC_POS["lat"] + 0.015, "lon": _GC_POS["lon"],
+                      "alt": 50.0}   # ~1670 m due north
+        bb.set("leader_state", {"position": far_leader, "timestamp": clock.now()})
+        bb.set("relay_tasking_received", {"tasking_id": "t1", "leader_id": "drone-01"})
+
+        root = build_relay_decision_tree(bb, _TREE_CFG, clock=clock.now)
+        bt = py_trees.trees.BehaviourTree(root)
+        bt.setup()
+        bt.tick()
+
+        proposal = bb.get("pending_proposal")
+        assert proposal is not None
+        assert proposal["strategy"] == "LET_LEADER_ISOLATE"
+        assert proposal["trigger"]  == "CapFail", (
+            f"decline must be CapFail (band infeasible is a capability failure), "
+            f"got trigger={proposal.get('trigger')!r} reason={proposal.get('reason')!r}"
+        )
+        assert proposal["reason"]  == "GeometryFeasible", (
+            f"decline reason must name the failing check, got {proposal.get('reason')!r}"
         )

@@ -127,29 +127,35 @@ class LinkQualityBelow(ConditionNodeBase):
 
 
 class GeometryFeasible(ConditionNodeBase):
-    """SUCCESS if leader is within bridgeable range from GC (dual-range)."""
+    """
+    SUCCESS iff BandSensorNode wrote band_fillable=True this tick.
+
+    SESSION_LOG 2026-10-06 CORRECTION: this node used to compute its own
+    reduced reach using only follower_severity and a lenient 0.85 margin,
+    while BandSensorNode did the real band-closing check using gc_severity
+    AND leader_severity AND follower_severity. The two routinely disagreed
+    (e.g. leader at P1-NE: GeometryFeasible said feasible, BandSensorNode
+    wrote band_fillable=False, R_target was not written, ProposeContinuousRelay
+    then returned FAILURE on missing R_target, and STRATEGY_SELECTION fell
+    through to LET_LEADER_ISOLATE(NoStrategy) — making the real reason
+    invisible). BandSensorNode is the one shared geometry; delegate here.
+    """
 
     def update(self):
-        tasking = self.bb.get("relay_tasking_received")
-        leader_pos = (
-            (tasking or {}).get("leader_pos")
-            or (self.bb.get("leader_state") or {}).get("position")
-            or self.config.get("leader_pos")
-        )
-        if not leader_pos:
-            return self._set(_R, "leader_pos not available (not in relay_tasking, bb, or config)")
-
-        gc_pos = self.config["gc_pos"]
-        gc_range = self.config.get("gc_radio_range_m", self.config.get("radio_range_m", 800))
-        ldr_range = self.config.get("leader_radio_range_m", self.config.get("radio_range_m", 800))
-        sev = _follower_severity(self.bb, self.config)
-        factor = self.config.get("jamming_severity_factor", 0.6)
-
-        eff_gc = effective_radio_range(gc_range, sev, factor)
-        eff_ldr = effective_radio_range(ldr_range, sev, factor)
-
-        feasible, reason = relay_is_feasible(gc_pos, leader_pos, eff_gc, eff_ldr)
-        return self._set(_S if feasible else _F, reason)
+        fillable = self.bb.get("band_fillable")
+        if fillable is None:
+            # BandSensorNode(entry) must run first in FULL_ENTRY — if we got
+            # here without it writing band_fillable, the tree is misconfigured.
+            return self._set(_R, "BandSensorNode has not written band_fillable yet")
+        D   = self.bb.get("band_D")
+        r_G = self.bb.get("band_r_G")
+        r_L = self.bb.get("band_r_L")
+        detail = (f"D={D:.0f}m r_G+r_L={(r_G + r_L):.0f}m"
+                  if D is not None and r_G is not None and r_L is not None
+                  else "no band metrics available")
+        if fillable:
+            return self._set(_S, f"band fillable: {detail}")
+        return self._set(_F, f"band infeasible: {detail}")
 
 
 class DataFreshness(ConditionNodeBase):

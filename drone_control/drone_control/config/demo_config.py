@@ -104,7 +104,20 @@ DEMO_CONFIG = {
     "leader_id": "drone-01",
 
     # Hardware nominal radio ranges — maximum usable range with zero jamming.
-    # 1500m: at gc_to_leader severity=0.70 → eff_range=870m → r_G+r_L=1374m > D=1058m ✓
+    # Band math at the diamond waypoints (updated 2026-10-06):
+    #   cap_gc = cap_ldr = 1500 * (1 - 0.70 * 0.6) = 870 m  (gc/leader_severity=0.70)
+    #   r_G = r_L = 870 * (1 - 0.35 * 0.6) = 687 m          (follower_severity=0.35)
+    #   r_G + r_L = 1375 m
+    # Compared to D (GC → waypoint, haversine):
+    #   P5-base ( 958 m)  margin +417 m  ✓ fillable
+    #   P4-SW   ( 549 m)  margin +826 m  ✓ fillable
+    #   P3-SE   ( 842 m)  margin +533 m  ✓ fillable
+    #   P2-E    (1194 m)  margin +181 m  ✓ fillable
+    #   P1-NE   (1398 m)  margin  -24 m  ✗ NOT fillable at current severities
+    # The P1-NE margin is negative under the current compound severity model;
+    # earlier runs (pre-DIAG_SCAN / pre-follower-severity-compounding) treated
+    # it as feasible. Reduce follower_severity to ≤0.30 or gc/leader_severity
+    # to ≤0.65 to recover a positive margin at P1-NE.
     "gc_radio_range_m":       1500,
     "leader_radio_range_m":   1500,
     "follower_radio_range_m": 1500,
