@@ -215,7 +215,13 @@ class _TestableAssessorCore:
         Mirrors capability_assessor._on_reeval_trigger(): publishes reauth_request
         with reason='reeval:{reason}'. Does NOT check _reauth_request_sent — the
         SNR fast-path is not one-shot; continuous_monitor COOLDOWN_S debounces.
+
+        SESSION_LOG 2026-10-06: relay_completed is observed but DOES NOT
+        produce a reauth_request. Gate 8 covers post-arrival geometry
+        re-check and the two-together caused a feedback loop.
         """
+        if reason == "relay_completed":
+            return
         self.reauth_captures.append({
             "drone_id":  "test-drone",
             "timestamp": self._clock_fn(),
@@ -792,13 +798,44 @@ class TestReevalTriggerToReauth:
             f"Expected 1 reauth_request; got {len(core.reauth_captures)}"
         )
 
-    def test_relay_completed_publishes_reauth(self):
-        """receive_reeval_trigger('relay_completed') also appends a reauth_request."""
+    def test_relay_completed_does_not_publish_reauth(self):
+        """
+        SESSION_LOG 2026-10-06: relay_completed must NOT produce a
+        reauth_request. The event is still delivered (subscription remains)
+        but is a no-op in capability_assessor — gate 8 (RelayActuallyImproved)
+        runs every tick in DIAG_SCAN and covers the post-arrival geometry
+        re-check. Keeping the pre-fix reauth caused a feedback loop:
+          new auth → new relay_assignment → tracker re-arrives
+          → relay_confirmed → relay_completed → new reauth.
+        """
         core = _make_core()
         core.receive_reeval_trigger("relay_completed")
+        assert len(core.reauth_captures) == 0, (
+            "relay_completed must not trigger reauth_request; "
+            f"got {core.reauth_captures}"
+        )
 
+    def test_arrival_alone_produces_no_reauth(self):
+        """End-to-end on the harness: a relay_confirmed-equivalent event
+        (reason='relay_completed') produces zero reauth_requests."""
+        core = _make_core()
+        core.receive_reeval_trigger("relay_completed")
+        core.receive_reeval_trigger("relay_completed")
+        assert len(core.reauth_captures) == 0
+
+    def test_gate_8_failing_still_publishes_reauth(self):
+        """
+        Gate 8 writes reauth_requested_at on failure; capability_assessor's
+        tick-loop then publishes reauth_request exactly once. The fix for
+        relay_completed must not break this path.
+        """
+        core = _make_core()
+        core._bb.set("reauth_requested_at", core._clock_fn())
+        core._reauth_request_sent = False
+        core.tick()
         assert len(core.reauth_captures) == 1, (
-            "relay_completed reeval_trigger must publish reauth_request"
+            "Gate-8 reauth path must still fire; "
+            f"got {len(core.reauth_captures)}"
         )
 
     def test_reason_carries_trigger_reason(self):

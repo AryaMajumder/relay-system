@@ -384,6 +384,19 @@ class CapabilityAssessor(Node):
         except Exception:
             return
         reason = data.get("reason", "unknown")
+        # SESSION_LOG 2026-10-06: relay_completed must NOT trigger reauth.
+        # Gate 8 (RelayActuallyImproved) runs every tick in DIAG_SCAN and
+        # covers post-arrival geometry re-check already. Publishing a reauth
+        # on every relay_confirmed creates a feedback loop: new auth → new
+        # relay_assignment → tracker re-arrives → relay_confirmed →
+        # relay_completed → new reauth. The subscription stays so operators
+        # see the event in the journal; the publish is gated by reason.
+        if reason == "relay_completed":
+            self.get_logger().info(
+                "reeval_trigger(reason='relay_completed') observed; "
+                "no reauth_request (gate 8 covers post-arrival re-check)"
+            )
+            return
         reauth_msg = String()
         reauth_msg.data = json.dumps({
             "drone_id":  self._drone_id,
