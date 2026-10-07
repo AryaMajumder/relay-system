@@ -181,24 +181,44 @@ class ProposeChainRelay(ActionNodeBase):
         return self._set(py_trees.common.Status.SUCCESS, "CHAIN_RELAY proposed")
 
 
+_LLI_MODE_RE = re.compile(r"\(([^)]+)\)\s*$")
+
+
 class ProposeLetLeaderIsolate(ActionNodeBase):
     """
-    Explicit decline of GC tasking with reason; the GC decides what happens to the leader.
-    Fallback — always succeeds. Fires at entry when capability checks fail.
+    Explicit decline of GC tasking; the GC decides what happens to the leader.
+    Always succeeds. Two tree-wiring modes, identified by self.name:
+      - ProposeLetLeaderIsolate(CapFail)    — a check in FULL_ENTRY failed.
+        Reason is the name of that failing check, read from
+        bb["last_capability_check"] (written by ConditionNodeBase._set).
+      - ProposeLetLeaderIsolate(NoStrategy) — all FULL_ENTRY checks passed
+        but neither SingleFollowerSufficient nor ChainFeasible selected a
+        strategy. Reason is a fixed literal "no_strategy".
     """
 
     def update(self) -> py_trees.common.Status:
         tasking = self.bb.get("relay_tasking_received") or {}
+        mode_match = _LLI_MODE_RE.search(self.name or "")
+        mode = mode_match.group(1) if mode_match else "unknown"
+        if mode == "NoStrategy":
+            reason = "no_strategy"
+        elif mode == "CapFail":
+            reason = self.bb.get("last_capability_check") or "unknown_capability_check"
+        else:
+            reason = "unknown"
         proposal = {
             "proposal_id":  self.proposal_id,
             "timestamp":    time.time(),
             "strategy":     "LET_LEADER_ISOLATE",
+            "reason":       reason,
+            "trigger":      mode,
             "tasking_id":   tasking.get("tasking_id"),
             "leader_id":    tasking.get("leader_id"),
         }
         self.bb.set("pending_proposal", proposal)
-        log.info("[ProposeLetLeaderIsolate] entry capability fail — let leader isolate")
-        return self._set(py_trees.common.Status.SUCCESS, "LET_LEADER_ISOLATE proposed")
+        log.info("[ProposeLetLeaderIsolate] decline: mode=%s reason=%s", mode, reason)
+        return self._set(py_trees.common.Status.SUCCESS,
+                         f"LET_LEADER_ISOLATE proposed (mode={mode}, reason={reason})")
 
 
 class FollowerSafetyExit(ActionNodeBase):

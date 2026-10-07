@@ -438,3 +438,58 @@ class TestProposeIncumbentContinuousRelay:
         assert bb.get("pending_proposal")["relay_position"]["lat"] == 47.410, (
             "incumbent bid must track live current_relay_target when auth updates"
         )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ProposeLetLeaderIsolate — decline reason attribution (2026-10-06)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestLetLeaderIsolateReason:
+    """
+    SESSION_LOG 2026-10-06: ProposeLetLeaderIsolate must publish the
+    specific decline reason into the proposal so it can flow through
+    relay_strategy_evaluator → RDA's log.
+      - CapFail  → reason = bb["last_capability_check"]
+      - NoStrategy → reason = "no_strategy"
+    """
+
+    def _node(self, mode):
+        node = ProposeLetLeaderIsolate(bb=_bb(), config=_CFG)
+        node.name = f"ProposeLetLeaderIsolate({mode})"
+        return node
+
+    def test_capfail_reason_is_last_capability_check_name(self):
+        """CapFail reads bb['last_capability_check'] as the decline reason."""
+        node = self._node("CapFail")
+        node.bb.set("last_capability_check", "LeaderReachabilityFresh")
+        node.update()
+        p = node.bb.get("pending_proposal")
+        assert p["strategy"] == "LET_LEADER_ISOLATE"
+        assert p["trigger"] == "CapFail"
+        assert p["reason"]  == "LeaderReachabilityFresh"
+
+    def test_capfail_fallback_reason_when_bb_missing(self):
+        """CapFail with no last_capability_check uses an explicit placeholder."""
+        node = self._node("CapFail")
+        node.update()
+        assert node.bb.get("pending_proposal")["reason"] == "unknown_capability_check"
+
+    def test_nostrategy_reason_is_literal_no_strategy(self):
+        """NoStrategy ignores bb state; reason is always 'no_strategy'."""
+        node = self._node("NoStrategy")
+        node.bb.set("last_capability_check", "GeometryFeasible")  # must be ignored
+        node.update()
+        p = node.bb.get("pending_proposal")
+        assert p["trigger"] == "NoStrategy"
+        assert p["reason"]  == "no_strategy"
+
+    def test_condition_node_set_writes_last_capability_check(self):
+        """ConditionNodeBase._set must record self.name to bb on every tick."""
+        from drone_control.relay_bt.condition_nodes import ConditionNodeBase
+        bb = _bb()
+        class _Dummy(ConditionNodeBase):
+            def update(self): return self._set(_S, "ok")
+        dummy = _Dummy(bb=bb, config=_CFG, name="FakeCheck")
+        dummy.update()
+        assert bb.get("last_capability_check") == "FakeCheck"

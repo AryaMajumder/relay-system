@@ -76,6 +76,13 @@ class ConditionNodeBase(py_trees.behaviour.Behaviour):
     def _set(self, status: py_trees.common.Status, msg: str) -> py_trees.common.Status:
         self.feedback_message = msg
         log.debug("[%s] %s — %s", self.name, status.name, msg)
+        # SESSION_LOG 2026-10-06: record the most-recently-ticked condition
+        # node so ProposeLetLeaderIsolate(CapFail) can attribute its decline
+        # to the failing check. In a Sequence, the LAST node to execute is
+        # the one that returned FAILURE (SUCCESS lets execution advance), so
+        # by the time CapFail fires this key holds the failing name.
+        if hasattr(self, "bb") and self.bb is not None:
+            self.bb.set("last_capability_check", self.name)
         return status
 
 
