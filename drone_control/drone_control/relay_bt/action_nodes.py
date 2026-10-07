@@ -322,12 +322,21 @@ class ProposeIncumbentContinuousRelay(ActionNodeBase):
     """
 
     def update(self) -> py_trees.common.Status:
-        R_target = self.bb.get("current_relay_target")
+        # Bid for the LIVE R_target computed by BandSensorNode this tick, not
+        # the authorized current_relay_target. When the leader has moved and
+        # gate 8 has triggered a reauth round, the incumbent must bid for the
+        # NEW R_target so the follow-on authorization moves the follower to
+        # the shifted band center; bidding the authorized point would renew
+        # the stale position. SESSION_LOG 2026-10-06 CORRECTION.
+        R_target = self.bb.get("R_target")
         if not R_target:
-            # No live assignment to bid — leave pending_proposal untouched.
-            # ARBITER_SCAN still returns SUCCESS so RELAYING_BRANCH continues.
+            # BandSensorNode did not write R_target this tick (band not
+            # fillable). Leave pending_proposal untouched. ARBITER_SCAN still
+            # returns SUCCESS so RELAYING_BRANCH continues — the viability
+            # gates (G4-G7) are the right place to react to infeasibility,
+            # not the incumbent-bid terminal.
             return self._set(py_trees.common.Status.SUCCESS,
-                             "no current_relay_target — no incumbent bid")
+                             "no live R_target — no incumbent bid")
 
         cost = _cost_from_target(self.bb, self.config, R_target)
         drone_state = self.bb.get("drone_state") or {}

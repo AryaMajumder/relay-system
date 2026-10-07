@@ -370,7 +370,9 @@ class TestProposeIncumbentContinuousRelay:
     SESSION_LOG 2026-10-06 DEVIATION: the pre-existing ARBITER_SCAN
     terminal was _succeed("CONTINUE") — the incumbent submitted nothing
     on reauth rounds. The new terminal bids CONTINUOUS_RELAY for the live
-    current_relay_target so a reauth round can renew the incumbent.
+    bb["R_target"] (computed each tick by BandSensorNode), not the
+    authorized current_relay_target, so a reauth round moves the follower
+    to the shifted band center.
     """
 
     def _bb(self):
@@ -383,18 +385,18 @@ class TestProposeIncumbentContinuousRelay:
         })
         return bb
 
-    def test_incumbent_bids_continuous_relay_for_live_target(self):
-        """Node writes CONTINUOUS_RELAY proposal for current_relay_target."""
+    def test_incumbent_bids_continuous_relay_for_live_r_target(self):
+        """Node writes CONTINUOUS_RELAY proposal for the live R_target."""
         bb = self._bb()
         R = {"lat": 47.400, "lon": 8.550, "alt_m": 50.0}
-        bb.set("current_relay_target", R)
+        bb.set("R_target", R)
         node = ProposeIncumbentContinuousRelay(bb=bb, config=_CFG)
         assert node.update() == _S
         proposal = bb.get("pending_proposal")
         assert proposal is not None, "incumbent must write a pending_proposal"
         assert proposal["strategy"] == "CONTINUOUS_RELAY"
         assert proposal["relay_position"] == R, (
-            "incumbent must bid for the LIVE current_relay_target, verbatim"
+            "incumbent must bid for the live R_target, verbatim"
         )
         assert proposal["trigger"] == "incumbent"
         assert proposal["reason"]  == "incumbent_bid"
@@ -402,7 +404,7 @@ class TestProposeIncumbentContinuousRelay:
     def test_eta_s_derived_from_distance_to_target(self):
         """eta_seconds in cost is non-zero when follower is away from target."""
         bb = self._bb()
-        bb.set("current_relay_target", {"lat": 47.500, "lon": 8.650, "alt_m": 50.0})
+        bb.set("R_target", {"lat": 47.500, "lon": 8.650, "alt_m": 50.0})
         node = ProposeIncumbentContinuousRelay(bb=bb, config=_CFG)
         node.update()
         proposal = bb.get("pending_proposal")
@@ -411,33 +413,55 @@ class TestProposeIncumbentContinuousRelay:
             f"{proposal['cost']['eta_seconds']}"
         )
 
-    def test_succeeds_without_current_relay_target(self):
+    def test_succeeds_without_r_target(self):
         """
-        If current_relay_target is unset the node must still SUCCESS so
-        ARBITER_SCAN's terminal child does not fail the RELAYING_BRANCH
-        Sequence. No pending_proposal is written in that case.
+        If R_target is unset (band not fillable this tick) the node must
+        still SUCCESS so ARBITER_SCAN's terminal child does not fail the
+        RELAYING_BRANCH Sequence. No pending_proposal is written in that case.
         """
         bb = self._bb()
         node = ProposeIncumbentContinuousRelay(bb=bb, config=_CFG)
         assert node.update() == _S
         assert bb.get("pending_proposal") is None, (
-            "no bid should be written when current_relay_target is absent"
+            "no bid should be written when R_target is absent"
         )
 
-    def test_new_authorized_target_updates_bid(self):
-        """When current_relay_target changes (new auth), next tick bids new target."""
+    def test_bid_tracks_r_target_when_it_shifts(self):
+        """New R_target each tick → next tick bids the new position."""
         bb = self._bb()
-        bb.set("current_relay_target", {"lat": 47.400, "lon": 8.550, "alt_m": 50.0})
+        bb.set("R_target", {"lat": 47.400, "lon": 8.550, "alt_m": 50.0})
         node = ProposeIncumbentContinuousRelay(bb=bb, config=_CFG)
         node.update()
         assert bb.get("pending_proposal")["relay_position"]["lat"] == 47.400
 
-        # Simulate the capability_assessor applying a fresh relay_assignment.
-        bb.set("current_relay_target", {"lat": 47.410, "lon": 8.560, "alt_m": 50.0})
+        bb.set("R_target", {"lat": 47.410, "lon": 8.560, "alt_m": 50.0})
         node.update()
         assert bb.get("pending_proposal")["relay_position"]["lat"] == 47.410, (
-            "incumbent bid must track live current_relay_target when auth updates"
+            "incumbent bid must track the live R_target when BandSensorNode shifts it"
         )
+
+    def test_bid_is_r_target_not_current_relay_target_when_they_differ(self):
+        """
+        Critical invariant: the bid's relay_position is the live R_target,
+        NOT the authorized current_relay_target. During a reauth round
+        triggered by gate 8, the two deliberately differ — the authorized
+        target is the stale authorized point and the live R_target is the
+        shifted band center. The incumbent must bid for the live point so
+        the follow-on authorization moves the follower.
+        """
+        bb = self._bb()
+        authorized = {"lat": 47.400, "lon": 8.550, "alt_m": 50.0}  # stale
+        live_r     = {"lat": 47.405, "lon": 8.555, "alt_m": 50.0}  # shifted
+        bb.set("current_relay_target", authorized)
+        bb.set("R_target", live_r)
+        node = ProposeIncumbentContinuousRelay(bb=bb, config=_CFG)
+        node.update()
+        bid = bb.get("pending_proposal")["relay_position"]
+        assert bid == live_r, (
+            f"incumbent must bid the live R_target {live_r}, got {bid}. "
+            f"Bidding current_relay_target would renew the stale position."
+        )
+        assert bid != authorized
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

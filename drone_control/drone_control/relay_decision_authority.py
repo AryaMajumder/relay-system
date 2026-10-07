@@ -302,8 +302,10 @@ class _DecisionCore:
         # BUILDSPEC §4.10 step 4: "new proposal → insert; existing → replace."
         action = "replaced" if drone_id in self._collected else "inserted"
         self._collected[drone_id] = payload
+        gate = (payload.get("trigger_context") or {}).get("gate_fired") or "?"
         self._log(
             f"Collected {action}: drone={drone_id} strategy={strategy} "
+            f"gate={gate} "
             f"battery={payload.get('capability_snapshot', {}).get('battery_pct')}"
         )
 
