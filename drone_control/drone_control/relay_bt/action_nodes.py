@@ -342,8 +342,17 @@ class ProposeIncumbentContinuousRelay(ActionNodeBase):
         drone_state = self.bb.get("drone_state") or {}
         follower_id = drone_state.get("drone_id") or self.config.get("drone_id", "drone-02")
 
+        # Generate a fresh proposal_id per bid. ActionNodeBase.__init__ assigns
+        # one proposal_id at construction time, which is fine for one-shot
+        # proposers (ProposeContinuousRelay / ProposeChainRelay / ...), but
+        # the incumbent fires every RELAYING tick — reusing the same id made
+        # every bid look like the same proposal across rounds and across
+        # process lifetimes. BUILDSPEC §4.9 content-hash dedup is independent
+        # of this id; proposal_id is just an identifier.
+        proposal_id = f"prop-{uuid.uuid4().hex[:12]}"
+
         proposal = {
-            "proposal_id":    self.proposal_id,
+            "proposal_id":    proposal_id,
             "timestamp":      time.time(),
             "strategy":       "CONTINUOUS_RELAY",
             "relay_position": R_target,

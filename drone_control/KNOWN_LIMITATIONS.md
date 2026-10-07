@@ -68,3 +68,19 @@ The forward direction (feasible → infeasible) is measured: 2:34 delay from cro
 **Cause unconfirmed** — the symptom is consistent with CycloneDDS participant liveliness-lease expiry under a transient GC pause or scheduling stall, but the default Cyclone config emits no logs that would distinguish that from a loopback-socket drop.
 
 **Mitigation now active:** CycloneDDS tracing enabled at `fine` verbosity, writing to `/var/log/cyclonedds/cyclonedds.log` with 200MB rotation (see `/etc/ros/cyclonedds.xml` and `/etc/logrotate.d/cyclonedds`). Any recurrence will be captured. No code-level mitigation added yet — a decision between application-layer heartbeats vs. transport-level liveliness tuning is pending repro + trace evidence.
+
+## current_role has two publishers (restart race)
+
+`/{drone}/current_role` is TRANSIENT_LOCAL and has two publishers:
+
+- `strategy_executor` — writes `MOVING_TO_RELAY` on CONTINUOUS/CHAIN authorization and `OPEN_TO_RELAY` on EXIT_RELAY authorization.
+- `relay_position_tracker` — writes `RELAYING` when the follower arrives at the authorized `current_relay_target`.
+
+Each publisher keeps its own TRANSIENT_LOCAL cache. A subscriber that restarts gets replays from both caches, in a DDS-implementation-defined order. Observed 2026-10-06: restarting only `capability_assessor` after a prior session had reached RELAYING caused the tracker's latched `RELAYING` to arrive after the executor's latched `OPEN_TO_RELAY`. The subscriber's final view was `RELAYING`, `IsAlreadyRelaying` returned SUCCESS, the BT entered RELAYING_BRANCH against an actually-HOLD follower, and G3 (`OffboardModeHeld`) spam-fired `FollowerSafetyExit` on every tick.
+
+**Operational workaround today:** restart `capability_assessor` and `strategy_executor` together. The executor's startup reconcile (`SESSION_LOG 2026-10-01`) will publish a fresh value that wins the ordering against the tracker's stale latch, provided the restart is close in time.
+
+**Proper fix (not implemented):** `current_role` should have a single owner. Candidates:
+- Have the tracker publish `RELAYING` back into the executor (new topic or a service call) and let the executor be the sole publisher of `current_role`.
+- Add a session epoch field to each `current_role` message; subscribers reject values from unknown epochs. (See `SESSION_LOG 2026-10-01` option 2 for the general pattern.)
+- Collapse the two writers into one node that owns both the authorization-mapping and the arrival-latching logic.

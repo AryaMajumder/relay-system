@@ -440,6 +440,31 @@ class TestProposeIncumbentContinuousRelay:
             "incumbent bid must track the live R_target when BandSensorNode shifts it"
         )
 
+    def test_two_consecutive_bids_have_different_proposal_ids(self):
+        """
+        proposal_id must be regenerated per bid. ActionNodeBase assigns one
+        id at construction; the incumbent fires every RELAYING tick so
+        reusing it made bids indistinguishable across rounds and process
+        lifetimes.
+        """
+        bb = self._bb()
+        bb.set("R_target", {"lat": 47.400, "lon": 8.550, "alt_m": 50.0})
+        node = ProposeIncumbentContinuousRelay(bb=bb, config=_CFG)
+        node.update()
+        first = bb.get("pending_proposal")["proposal_id"]
+        node.update()
+        second = bb.get("pending_proposal")["proposal_id"]
+        assert first != second, (
+            f"consecutive bids must have different proposal_ids; "
+            f"got {first!r} both times"
+        )
+        # And both must still match the 'prop-<12hex>' schema from §4.9.
+        import re
+        for pid in (first, second):
+            assert re.fullmatch(r"prop-[0-9a-f]{12}", pid), (
+                f"proposal_id {pid!r} does not match prop-<12hex>"
+            )
+
     def test_bid_is_r_target_not_current_relay_target_when_they_differ(self):
         """
         Critical invariant: the bid's relay_position is the live R_target,
