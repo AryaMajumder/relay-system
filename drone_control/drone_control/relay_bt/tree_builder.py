@@ -25,7 +25,7 @@ Root Selector dispatches on role (RELAYING vs IDLE):
   │           ├── G6  Seq(Inv(RelayStillNeeded),             ProposeExitRelay)
   │           ├── G7  Seq(Inv(RelayLinkAdequate),            ProposeExitRelay)
   │           ├── REAUTH_TIMEOUT  Seq(Inv(ReauthResponseTimedOut), ProposeExitRelay)
-  │           └── CONTINUE  AlwaysSucceed                     all gates passed
+  │           └── ProposeIncumbentContinuousRelay             all gates passed → bid live R_target
   └── IDLE_BRANCH [Sequence]            gated NotAlreadyRelaying
         ├── NotAlreadyRelaying
         ├── RelayRequestReceived        sole entry trigger
@@ -195,7 +195,8 @@ def build_relay_decision_tree(bb: TimestampedBlackboard,
              _inv(_n(RfLinkTelemetryFresh)),
              _n(ProposeExitRelay, name="ProposeExitRelay(G5)"),
         ),
-        # G6: relay still needed (direct link still poor — hysteresis at 0.85)
+        # G6: relay still needed (fails when direct link recovers above
+        # config.relay_exit_quality_threshold)
         _seq("G6_NEEDED",
              _inv(_n(RelayStillNeeded)),
              _n(ProposeExitRelay, name="ProposeExitRelay(G6)"),

@@ -80,5 +80,5 @@ See [`drone_control/KNOWN_LIMITATIONS.md`](drone_control/KNOWN_LIMITATIONS.md) f
 ```bash
 cd drone_control
 python3 -m pytest tests/ -q
-# 310 passed in ~25 s
+# 386 passed in ~11 s
 ```

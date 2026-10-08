@@ -1,5 +1,7 @@
 # SITL Integration Test — drone-02 Relay System
 
+> **Historical document.** Captures a specific pre-2026-10 run. The behavioural pattern (follower enters RELAYING, leader moves, re-authorization fires, follower moves, graceful exit on infeasibility) still holds; specific topic / timing numbers may be stale. For the current pipeline see [`docs/CURRENT_DESIGN.md`](docs/CURRENT_DESIGN.md).
+
 ## Objective
 
 Verify end-to-end relay acquisition for `drone-02` acting as a follower drone in a three-node relay network (Ground Control → Follower → Leader). The test was considered passing when:

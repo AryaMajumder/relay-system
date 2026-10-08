@@ -423,8 +423,13 @@ class TestEmptyWindowRebroadcasts:
 
 
 class TestPostAuthorizationRebroadcast:
-    def test_rebroadcast_scheduled_after_authorization(self):
-        """After granting authorization, next poll is scheduled at rebroadcast_pause_s."""
+    def test_no_rebroadcast_scheduled_after_continuous_authorization(self):
+        """
+        SESSION_LOG 2026-10-07: CONTINUOUS_RELAY authorization populates
+        _active_auths; the fleet is being served; no need to re-poll. Earlier
+        code scheduled an unconditional post-auth rebroadcast that the gating
+        branch always suppressed anyway — dead state. Removed.
+        """
         core, tasking, auth, clock = _make_core()
         core.on_gc_link_quality({"quality": 0.2})
         round_id = core._current_round_id
@@ -433,8 +438,8 @@ class TestPostAuthorizationRebroadcast:
         clock.advance(50)
         core.check_timers()
         assert len(auth) == 1, "Authorization should be granted"
-        assert core._rebroadcast_at is not None, (
-            "Next poll should be scheduled after authorization, even with a winner"
+        assert core._rebroadcast_at is None, (
+            "Post-auth with a live CONTINUOUS auth must NOT schedule rebroadcast"
         )
 
     def test_new_round_fires_after_post_auth_pause(self):
@@ -511,7 +516,7 @@ class TestRebroadcastGatedByLinkAndAuth:
         assert len(tasking) == 2, "Must still rebroadcast when conditions require it"
 
     def test_expired_authorization_allows_rebroadcast(self):
-        """Auth past valid_until → pruned → rebroadcast can fire again."""
+        """Auth past valid_until → pruned → rebroadcast scheduled → fires."""
         core, tasking, auth, clock = _make_core()
         core.on_gc_link_quality({"quality": 0.2})
         round_id = core._current_round_id
@@ -519,11 +524,85 @@ class TestRebroadcastGatedByLinkAndAuth:
         clock.advance(50); core.check_timers()             # grant
         assert len(auth) == 1
 
-        # Advance past authorization_validity_s (default 1800) + pause.
-        clock.advance(_CFG.get("authorization_validity_s", 1800) + 150)
+        # Advance just past authorization_validity_s so the auth expires.
+        clock.advance(_CFG.get("authorization_validity_s", 1800) + 1)
         core.on_gc_link_quality({"quality": 0.2})          # still degraded
+        core.check_timers()                                # prune → schedule
+        assert core._rebroadcast_at is not None
+
+        # Advance past rebroadcast_pause_s so the scheduled fire actually runs.
+        clock.advance(_CFG.get("rebroadcast_pause_s", 120) + 1)
         core.check_timers()
         assert len(tasking) >= 2, "Expired auth must not block rebroadcast"
+
+    def test_rebroadcast_scheduled_on_exit_relay_with_link_still_bad(self):
+        """
+        EXIT_RELAY path empties _active_auths. With link still below the
+        trigger, _maybe_schedule_rebroadcast_on_empty_auths must set
+        _rebroadcast_at so the fleet gets re-polled.
+        """
+        core, tasking, auth, clock = _make_core()
+        core.on_gc_link_quality({"quality": 0.2})
+        round_id = core._current_round_id
+        exit_prop = _make_proposal(drone_id="drone-02", round_id=round_id)
+        exit_prop["strategy"] = "EXIT_RELAY"
+        core.on_strategy_proposal(exit_prop)
+        clock.advance(50); core.check_timers()
+        assert "drone-02" not in core._active_auths
+        assert core._rebroadcast_at is not None, (
+            "EXIT_RELAY with link still degraded must schedule rebroadcast"
+        )
+
+    def test_rebroadcast_scheduled_on_safety_exit_with_link_still_bad(self):
+        """FOLLOWER_SAFETY_EXIT with link still bad schedules rebroadcast."""
+        core, tasking, auth, clock = _make_core()
+        core.on_gc_link_quality({"quality": 0.2})
+        round_id = core._current_round_id
+        core.on_strategy_proposal(_make_proposal(drone_id="drone-02", round_id=round_id))
+        clock.advance(50); core.check_timers()
+        assert "drone-02" in core._active_auths
+        core._rebroadcast_at = None     # clear the baseline
+
+        core.on_alert_intent({
+            "drone_id": "drone-02",
+            "type":     "FOLLOWER_SAFETY_EXIT",
+            "reason":   "offboard_unrecoverable",
+        })
+        assert "drone-02" not in core._active_auths
+        assert core._rebroadcast_at is not None, (
+            "FOLLOWER_SAFETY_EXIT with link still bad must schedule rebroadcast"
+        )
+
+    def test_rebroadcast_scheduled_on_auth_expiry_with_link_still_bad(self):
+        """When _active_auths is pruned to empty by check_timers and link is
+        still bad, schedule a rebroadcast."""
+        core, tasking, auth, clock = _make_core()
+        core.on_gc_link_quality({"quality": 0.2})
+        round_id = core._current_round_id
+        core.on_strategy_proposal(_make_proposal(drone_id="drone-02", round_id=round_id))
+        clock.advance(50); core.check_timers()
+        assert "drone-02" in core._active_auths
+        core._rebroadcast_at = None
+
+        validity = _CFG.get("authorization_validity_s", 1800)
+        clock.advance(validity + 10)        # auth expires
+        core.check_timers()
+        assert "drone-02" not in core._active_auths
+        assert core._rebroadcast_at is not None, (
+            "Expiry-pruned empty auth-set + bad link must schedule rebroadcast"
+        )
+
+    def test_no_rebroadcast_scheduled_when_link_recovered(self):
+        """Auths empty + link recovered: helper must NOT schedule rebroadcast."""
+        core, tasking, auth, clock = _make_core()
+        core.on_gc_link_quality({"quality": 0.9})       # link already good
+        core._active_auths = {"drone-02": clock.now() + 1800}
+        # Simulate the drone exiting (whatever path): pop + call the helper.
+        core._active_auths.pop("drone-02", None)
+        core._maybe_schedule_rebroadcast_on_empty_auths()
+        assert core._rebroadcast_at is None, (
+            "Link recovered: empty auths must NOT schedule rebroadcast"
+        )
 
     def test_safety_exit_clears_active_auth(self):
         """

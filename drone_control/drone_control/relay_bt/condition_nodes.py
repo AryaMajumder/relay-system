@@ -719,12 +719,12 @@ class RfLinkTelemetryFresh(ConditionNodeBase):
 class RelayStillNeeded(ConditionNodeBase):
     """
     Gate 6 — SUCCESS when the direct GC↔leader link is still poor.
-    FAILURE when direct link recovers above relay_exit_quality_threshold (0.85).
+    FAILURE when direct link recovers above config['relay_exit_quality_threshold'].
     In v1 SITL, gc_leader_direct_quality is never set → always SUCCESS.
     """
 
     def update(self):
-        threshold = self.config.get("relay_exit_quality_threshold", 0.85)
+        threshold = self.config.get("relay_exit_quality_threshold", 0.7)
         quality = self.bb.get("gc_leader_direct_quality")
         if quality is None:
             return self._set(_S, "gc_leader_direct_quality not available — relay still needed")

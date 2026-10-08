@@ -1,5 +1,7 @@
 # Session Log — 2026-08-12
 
+> **Append-only historical log.** Early entries describe behaviour that later entries have superseded (e.g. the 2026-08-18 reeval_trigger DEVIATION was further revised by 2026-10-06, which stopped `relay_completed` from publishing `reauth_request`). The current pipeline is defined by the code and summarised in `docs/CURRENT_DESIGN.md`.
+
 **Session:** 1   **Waves attempted:** pre-0 → 0   **Started from:** fresh
 
 ---
@@ -5750,3 +5752,27 @@ If either is false, clear `_rebroadcast_at` and log the suppression reason. A fr
 **Tests:** `TestProposeIncumbentContinuousRelay` (4 cases) in `test_wave5_action_nodes.py`. Suite 361 → 365.
 
 **Commit:** 85c8e2f.
+
+---
+
+## [2026-10-07] DECISION — doc audit resolution + rebroadcast gating revision
+
+**Rebroadcast gating revised.** Previously `_grant_authorization` scheduled an unconditional `_rebroadcast_at = now + 120 s`, which gating in `check_timers` always suppressed (`_active_auths` still had the just-granted entry). Dead state. Now the only rebroadcast schedule points are:
+- `on_alert_intent` on FOLLOWER_SAFETY_EXIT (pops the drone, then calls `_maybe_schedule_rebroadcast_on_empty_auths`)
+- `_grant_authorization` on EXIT_RELAY (pops the drone, same helper)
+- `check_timers` auth-expiry prune (last entry expired naturally, same helper)
+The helper is idempotent and gated on `_active_auths` empty AND `_last_gc_quality < _GC_QUALITY_TRIGGER`. Four tests added for the three schedule paths plus "link recovered → no rebroadcast".
+
+**Startup reconcile uses `valid_until`.** Removed the 300 s file-age cap in `strategy_executor._load_persisted_auth`. The authorization is the authority on its own validity; now `now < valid_until` is the only check. `STRATEGY_EXECUTOR_AUTH_MAX_AGE_S` env var is no longer consulted. Prior behaviour could evict a still-valid auth and tear down an active relay for the 300 s–1800 s window.
+
+**`relay_exit_quality_threshold` 0.99 → 0.7.** No deliberate rationale was recorded in SESSION_LOG for 0.99 — the only matches are discussions about a different variable (`hop_severities["gc_to_leader"]`). At 0.99 the direct GC↔leader quality had to be essentially perfect for the follower to exit the relay — which never happens in a jammed environment. 0.7 corresponds to `degrading_below` on the old quality scale.
+
+**`staleness_windows_s["drone_state"]` 10.0 → 6.0.** Matches G1 `fcu_telemetry_max_age_s`. Previously entry (10 s) and maintenance (6 s) disagreed on what "fresh" meant.
+
+**`leader_position_max_age_s=10.0` added to config.** Was being read with a default from `BandSensorNode` (`condition_nodes.py:506`) but not defined.
+
+**`link_thresholds`, `down_threshold_s`, `up_threshold_s` removed.** Unreferenced in live code. The two actually-live thresholds (`_GC_QUALITY_TRIGGER=0.5` and `relay_exit_quality_threshold=0.7`) are documented alongside their consumers.
+
+**Four `.py` files deleted:** `signal_reader.py`, `follower_signal_faker.py`, `gc_radio_health_publisher.py`, `leader_radio_health_publisher.py`. None referenced by any systemd unit or import. The hardware-radio-health gap that the two publisher scripts would have filled is now logged in KNOWN_LIMITATIONS.
+
+**Doc audit resolved.** Introduced `docs/CURRENT_DESIGN.md` as the authoritative design reference, written from the code with file:line citations. README, KNOWN_LIMITATIONS, CLAUDE.md updated to match current behaviour. Historical documents (SESSION_LOG, CHANGES, ANNOTATIONS, SITL_INTEGRATION_TEST_NOTES, docs/architecture.md) carry a "superseded by CURRENT_DESIGN" header rather than being rewritten. New test `test_docs_gate_table.py` locks the README gate table against drift from `MAINTENANCE_GATES`.

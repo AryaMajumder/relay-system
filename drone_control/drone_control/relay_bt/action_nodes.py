@@ -304,21 +304,20 @@ class FollowerSafetyExit(ActionNodeBase):
 
 class ProposeIncumbentContinuousRelay(ActionNodeBase):
     """
-    RELAYING-branch terminal: when all G1-G7 gates pass, the incumbent
-    bids CONTINUOUS_RELAY for its live authorized relay point so that a
-    reauth round can renew the incumbent instead of winning on EXIT_RELAY
-    gate flaps.
+    RELAYING-branch terminal. When all G1–G7 gates pass, the incumbent bids
+    CONTINUOUS_RELAY for the LIVE bb["R_target"] (band center recomputed each
+    tick by BandSensorNode) — NOT the authorized current_relay_target — so
+    that a reauth round moves the follower to the shifted band center. If
+    R_target is absent this tick (band not fillable), writes no proposal and
+    still returns SUCCESS so RELAYING_BRANCH's Sequence completes.
 
-    Reads current_relay_target (written by capability_assessor on
-    relay_assignment arrival). If absent (e.g. the follower just entered
-    RELAYING without having an assignment on the blackboard yet), this
-    node writes no proposal and returns SUCCESS — the ARBITER_SCAN
-    terminal must always succeed so RELAYING_BRANCH's outer Sequence
-    completes and the follower keeps streaming to its target.
+    proposal_id is regenerated per bid (not reused from ActionNodeBase.__init__)
+    so distinct bids across rounds have distinct identifiers.
 
-    SESSION_LOG 2026-10-06 DEVIATION — the pre-existing terminal was an
-    AlwaysSucceed, meaning the incumbent submitted nothing on a reauth
-    round's happy path. See the entry for discussion.
+    SESSION_LOG 2026-10-06 — pre-existing terminal was AlwaysSucceed; the
+    incumbent submitted nothing on reauth rounds and lost its slot every
+    cycle. SESSION_LOG 2026-10-06 CORRECTION — initial version read
+    current_relay_target; changed to R_target so bids track the live geometry.
     """
 
     def update(self) -> py_trees.common.Status:
@@ -394,7 +393,7 @@ class ProposeExitRelay(ActionNodeBase):
     def update(self) -> py_trees.common.Status:
         band_fillable  = self.bb.get("band_fillable")
         direct_quality = self.bb.get("gc_leader_direct_quality")
-        threshold = self.config.get("relay_exit_quality_threshold", 0.85)
+        threshold = self.config.get("relay_exit_quality_threshold", 0.7)
 
         if direct_quality is not None and direct_quality >= threshold:
             reason = "direct_link_recovered"

@@ -4,27 +4,23 @@ Honest inventory of what is not built, what is a simplification of a real system
 
 ## Not built
 
-### GC-side software
+### Cloud / fleet-level GC
 
-`relay_decision_authority` publishes proposals to MQTT and expects a response. The "GC" that responds is a local stub (`proposal_handler.py`, marked `CLOUD_STUB`) that auto-authorizes every proposal without any fleet-level policy, geofence, priority, or human-in-the-loop check. In a real deployment this would be a cloud service; here it is a local shim.
-
-### Cloud authorization path
-
-`relay_decision_authority._cloud_authorize()` publishes to MQTT and waits 10 s for a response. There is no cloud service on the far end. The code falls back to the local path after timeout.
+`relay_decision_authority` runs entirely local-process, in-memory (its own docstring: "No MQTT client. No Lambda forwarding. No circuit breaker. No retry queue."). There is no cloud service, no fleet-level policy, no human-in-the-loop. The in-process authorization is the only path.
 
 ### Multi-drone chain relay
 
-`ProposeChainRelay` and the `CHAIN_RELAY` strategy exist and flow through the pipeline. `chain_assigner` assigns a single target. Peer discovery, slot assignment, and handoff sequencing between multiple followers are not implemented. Two-drone continuous relay is the only shape actually validated.
+`ProposeChainRelay` and the `CHAIN_RELAY` strategy flow through the pipeline. `chain_assigner` assigns a single target. Peer discovery, slot assignment, and handoff sequencing between multiple followers are not implemented. Two-drone continuous relay is the only shape actually observed in SITL.
 
-### Geofence enforcement
+### Hardware radio-health publishers absent
 
-`relay_decision_authority` calls `_point_in_polygon()` if a `geofence_polygon` config key is set. `demo_config.py` does not define this key, so all positions pass the check silently.
+The three `*_radio_health_reader.py` nodes consume `/signal/*` topics produced by `signal_faker.py` (SITL only) via the shared `_radio_health_core` logic, which both computes AND publishes `*_radio_health`. On real hardware you'd replace `signal_faker` with a real radio adapter that publishes `/signal/*` from measured telemetry. The previous `gc_radio_health_publisher.py` / `leader_radio_health_publisher.py` modules were deleted 2026-10-07 as unreferenced; their intended role (publish per-device radio_health from real radios) is still unfilled.
 
 ## Not tested end-to-end
 
 ### No integration test in pytest
 
-All 308 passing unit tests are graph/message-shape/BT-logic tests. There is no automated test that injects `relay_tasking`, asserts `current_role` transitions, and verifies setpoints flow. The 25-minute continuous run and the band-infeasibility test were both executed by hand against SITL.
+All 386 passing unit tests are graph / message-shape / BT-logic tests. There is no automated test that injects `relay_tasking`, asserts `current_role` transitions, and verifies setpoints flow. SITL runs are manual.
 
 ### Symmetric re-engagement timing not captured
 

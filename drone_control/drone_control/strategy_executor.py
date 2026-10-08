@@ -9,19 +9,20 @@ PUBLISHES:  /{drone_id}/current_role
 Hard rules this file must satisfy (BUILDSPEC §4.8):
   - single subscription: authorization only           -> proven by test_single_subscription
   - no condition checking, no timers, no abort logic  -> proven by test_no_condition_logic
-  - all four §4.8 strategy rows applied correctly     -> proven by test_mapping_complete
-  - REPOSITION_RELAY → no role change                 -> proven by test_reposition_no_role_change
+  - all §4.8 strategy rows applied correctly          -> proven by test_mapping_complete
   - EXIT_RELAY source indistinguishable               -> proven by test_exit_sources_indistinguishable
 
 Strategy → current_role mapping (BUILDSPEC §4.8):
   CONTINUOUS_RELAY | CHAIN_RELAY → MOVING_TO_RELAY
-  REPOSITION_RELAY               → (no change)
   EXIT_RELAY                     → OPEN_TO_RELAY
+  (anything else, incl. LET_LEADER_ISOLATE) → no role change
 
 DELIBERATELY ABSENT:
   - relay_confirmed subscription: MOVING_TO_RELAY → RELAYING is handled outside this
     file (§4.8 table has no relay_confirmed row; test_single_subscription enforces this).
   - LET_LEADER_ISOLATE handling: not in §4.8 mapping table.
+  - REPOSITION_RELAY: strategy was removed from the design (commit 3d5ee8e,
+    2026-09-29); no node proposes it anywhere in the tree.
   - Independent abort logic: every exit arrives as EXIT_RELAY through the pipeline.
     This file cannot and must not decide to exit on its own.
 """
@@ -45,9 +46,11 @@ from std_msgs.msg import String
 _STATE_DIR = os.environ.get(
     "STRATEGY_EXECUTOR_STATE_DIR", "/var/lib/drone-control"
 )
-_AUTH_MAX_AGE_S = float(
-    os.environ.get("STRATEGY_EXECUTOR_AUTH_MAX_AGE_S", "300")
-)
+# SESSION_LOG 2026-10-07: previously used a 300 s cap on the file age.
+# That created a 300 s–authorization_validity_s inconsistency window where
+# the executor would publish OPEN_TO_RELAY while RDA still believed the
+# drone was serving. The authority on validity is the authorization itself;
+# honor its valid_until field.
 
 # Late joiners (relay_mover after restart, capability_assessor, continuous_monitor,
 # relay_position_tracker) receive the last-published current_role via TRANSIENT_LOCAL.
@@ -133,7 +136,14 @@ def _persist_auth(drone_id: str, payload: dict, logger=None) -> None:
             logger.warning(f"could not persist auth: {e}")
 
 
-def _load_persisted_auth(drone_id: str, max_age_s: float, logger=None):
+def _load_persisted_auth(drone_id: str, logger=None, now_fn=time.time):
+    """
+    Read the persisted authorization envelope. Returns the payload only when
+    the authorization's valid_until field is still in the future (SESSION_LOG
+    2026-10-07 — the authorization is the authority on its own validity).
+    Returns None on missing file, I/O error, parse error, missing valid_until,
+    or expiry.
+    """
     path = _state_path(drone_id)
     try:
         with open(path) as f:
@@ -144,12 +154,21 @@ def _load_persisted_auth(drone_id: str, max_age_s: float, logger=None):
         if logger:
             logger.warning(f"could not read persisted auth ({e}); ignoring")
         return None
-    age = time.time() - float(envelope.get("ts", 0))
-    if age > max_age_s:
+    payload = envelope.get("payload") or {}
+    valid_until = payload.get("valid_until")
+    if valid_until is None:
         if logger:
-            logger.info(f"persisted auth is {age:.0f}s old (>{max_age_s:.0f}s) — discarding")
+            logger.info("persisted auth has no valid_until — discarding")
         return None
-    return envelope.get("payload") or {}
+    now = now_fn()
+    if now >= valid_until:
+        if logger:
+            logger.info(
+                f"persisted auth expired ({now - valid_until:.0f}s past valid_until) "
+                f"— discarding"
+            )
+        return None
+    return payload
 
 
 class StrategyExecutor(Node):
@@ -184,7 +203,7 @@ class StrategyExecutor(Node):
         # Startup reconcile (see SESSION_LOG 2026-10-01 DEVIATION):
         # overwrite any stale TRANSIENT_LOCAL latch with a value that reflects
         # our actual last-known authorization — or OPEN_TO_RELAY if none/expired.
-        persisted = _load_persisted_auth(DRONE_ID, _AUTH_MAX_AGE_S, logger)
+        persisted = _load_persisted_auth(DRONE_ID, logger)
         if persisted is None:
             logger.info("startup reconcile: no live auth → OPEN_TO_RELAY")
             _publish_role("OPEN_TO_RELAY")

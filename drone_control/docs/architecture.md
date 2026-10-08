@@ -1,5 +1,7 @@
 # Architecture — Relay Decision Flow
 
+> **Historical document.** The Mermaid diagram and maintenance-cycle narrative below predate the 2026-10 revisions (ProposeIncumbentContinuousRelay terminal, DIAG_SCAN restructure, GeometryFeasible delegation, relay_completed no-op, rebroadcast gating). Specifically, the diagram still shows a `REPOSITION` path and treats the ARBITER_SCAN terminal as `AlwaysSucceed`. For the current pipeline, see [`CURRENT_DESIGN.md`](CURRENT_DESIGN.md).
+
 Roles are split across three lanes:
 
 - **Leader** — best-effort early-warning detection only. Publishes `relay_request` when its own GC link degrades; publishes `radio_health` continuously. Never depended on for the decision.

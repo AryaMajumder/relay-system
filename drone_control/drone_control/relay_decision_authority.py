@@ -242,6 +242,7 @@ class _DecisionCore:
         if payload.get("type") == "FOLLOWER_SAFETY_EXIT" and drone_id in self._active_auths:
             self._active_auths.pop(drone_id, None)
             self._log(f"Dropped active_auth for {drone_id} on FOLLOWER_SAFETY_EXIT")
+            self._maybe_schedule_rebroadcast_on_empty_auths()
 
     def on_strategy_proposal(self, payload: dict) -> None:
         """
@@ -338,23 +339,26 @@ class _DecisionCore:
                 )
                 self._close_window()
 
+        # Expiry prune on every tick, then check whether the auth set just
+        # emptied — if so and the link is still bad, schedule a rebroadcast.
+        # SESSION_LOG 2026-10-07.
+        self._active_auths = {
+            did: vu for did, vu in self._active_auths.items() if vu > now
+        }
+        self._maybe_schedule_rebroadcast_on_empty_auths()
+
         # Rebroadcast deadline.
         # SESSION_LOG 2026-10-04 DEVIATION fix: the rebroadcast chain used to
-        # run forever once primed, regardless of whether anyone still needed a
-        # relay. Now it fires only if (a) GC link is still degraded AND
-        # (b) no follower currently holds a valid authorization. Otherwise
-        # the deadline is cleared — a fresh degradation drop will re-prime it.
+        # run forever once primed. Now it fires only if GC link is still
+        # degraded AND no follower currently holds a valid authorization.
+        # Otherwise the deadline is cleared — a fresh degradation drop or a
+        # future auth-set-empty transition re-primes it.
         if self._rebroadcast_at is not None and now >= self._rebroadcast_at:
-            # Prune expired authorizations.
-            self._active_auths = {
-                did: vu for did, vu in self._active_auths.items() if vu > now
-            }
             link_degraded = (
                 self._last_gc_quality is not None
                 and self._last_gc_quality < _GC_QUALITY_TRIGGER
             )
             has_active_auth = bool(self._active_auths)
-
             if link_degraded and not has_active_auth:
                 self._rebroadcast_at = None
                 self._log("Rebroadcast pause elapsed — starting new broadcast round")
@@ -366,6 +370,30 @@ class _DecisionCore:
                     else f"active auth(s) outstanding: {sorted(self._active_auths)}"
                 )
                 self._log(f"Rebroadcast suppressed — {reason}")
+
+    def _maybe_schedule_rebroadcast_on_empty_auths(self) -> None:
+        """
+        If _active_auths just became empty AND link is still degraded, schedule
+        a rebroadcast. Idempotent — if _rebroadcast_at is already set or auths
+        are not empty, this is a no-op. Called from EXIT_RELAY, FOLLOWER_SAFETY_EXIT
+        and auth-expiry pruning in check_timers. SESSION_LOG 2026-10-07.
+        """
+        if self._active_auths:
+            return
+        if self._rebroadcast_at is not None:
+            return
+        link_degraded = (
+            self._last_gc_quality is not None
+            and self._last_gc_quality < _GC_QUALITY_TRIGGER
+        )
+        if not link_degraded:
+            return
+        pause = self._config.get("rebroadcast_pause_s", 120)
+        self._rebroadcast_at = self._clock() + pause
+        self._log(
+            f"No active auth and link still degraded — "
+            f"scheduling rebroadcast in {pause}s"
+        )
 
     # ── Round management ─────────────────────────────────────────────────────
 
@@ -499,16 +527,14 @@ class _DecisionCore:
             f"valid_until={authorization['valid_until']:.1f}"
         )
 
-        # Schedule next poll even when a winner was found. Without this, _armed
-        # stays False and on_gc_link_quality can't fire a new round unless the
-        # link recovers above _GC_QUALITY_TRIGGER — which never happens in a
-        # persistent-jamming scenario (e.g. after EXIT_RELAY while GC link is
-        # still degraded).
-        pause = cfg.get("rebroadcast_pause_s", 120)
-        self._rebroadcast_at = now + pause
-        self._log(
-            f"Next poll scheduled in {pause}s at t={self._rebroadcast_at:.1f}"
-        )
+        # SESSION_LOG 2026-10-07: EXIT_RELAY path can leave _active_auths
+        # empty while the link is still degraded. Schedule a rebroadcast via
+        # the same helper that check_timers and on_alert_intent use.
+        self._maybe_schedule_rebroadcast_on_empty_auths()
+        # (Previously this method also scheduled an unconditional
+        # _rebroadcast_at=now+pause for the CONTINUOUS/CHAIN success path.
+        # Removed — the rebroadcast-gating fix always suppressed it anyway
+        # because _active_auths[drone] was still populated.)
 
     # ── Decline handling ─────────────────────────────────────────────────────
 

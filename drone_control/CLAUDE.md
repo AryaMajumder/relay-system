@@ -24,12 +24,10 @@ The significance test from the protocol: *would someone reviewing this build lat
 
 ## BUILD CONTEXT
 
-- **BUILDSPEC:** `/root/BUILDSPEC.md` — what to build and exact specs
-- **TEST_PROTOCOL:** `/root/TEST_PROTOCOL.md` — per-file test cycle, archetype harnesses
-- **Build order:** Waves 0–9 in dependency order (§1 of BUILDSPEC)
-- **Current wave:** 6 (`capability_assessor.py`)
-- **Working directory:** `/root/ros2_ws/src/drone_control`
-- **Test runner:** `python3 -m pytest tests/ -x -q` from the working directory
+- **Authoritative design reference:** `drone_control/docs/CURRENT_DESIGN.md` (written from the code). Read this before changing BT / RDA / executor behaviour.
+- **BUILDSPEC** and **TEST_PROTOCOL** are historical references from the original waves 0–9 build. They are not in the repo; `BUILDSPEC §x` citations in code are to that older document. If you see a cite without context, trust the code and CURRENT_DESIGN.md.
+- **Working directory:** `/root/relay-system/drone_control` (checked out at `/root/ros2_ws/src/drone_control` via symlink for colcon builds).
+- **Test runner:** `python3 -m pytest tests/ -q` from the working directory. Baseline: 386 passing.
 
 ## HARD RULES (never violate without a DEVIATION entry)
 

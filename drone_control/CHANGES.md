@@ -1,5 +1,7 @@
 # Changes — SITL integration test (2026-07-03 / 2026-07-04)
 
+> **Historical document.** Covers a specific July 2026 session. Many later changes (incumbent bid, GeometryFeasible delegation, rebroadcast gating, relay_completed no-op, etc., Oct 2026) are not captured here — see `git log` and `docs/CURRENT_DESIGN.md` instead.
+
 Five source files were modified during the integration test session.
 Confidence level is noted for each: **exact** means the before/after value
 is known from session records; **attributed** means the file's mtime falls

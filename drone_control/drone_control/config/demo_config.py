@@ -190,7 +190,12 @@ DEMO_CONFIG = {
 
     "reposition_improvement_threshold_db": 5,
     "relay_effective_snr_improvement_db":  3,
-    "relay_exit_quality_threshold": 0.99,
+    # Direct GC↔leader quality above which G6 (RelayStillNeeded) FAILS and
+    # the follower exits the relay. SESSION_LOG 2026-10-07: lowered from 0.99
+    # to 0.7 after audit — no deliberate rationale was recorded for 0.99 and
+    # at 0.99 the direct link had to be essentially perfect for the follower
+    # to let go, which never happens in a jammed environment.
+    "relay_exit_quality_threshold": 0.7,
     "debounce_n": 3,
 
     # ── Freshness domains ─────────────────────────────────────────────────────
@@ -204,21 +209,25 @@ DEMO_CONFIG = {
 
     "stale_severity_floor": 0.5,
 
+    # SESSION_LOG 2026-10-07: drone_state window lowered from 10.0 to 6.0 so
+    # DataFreshness (entry gate) and G1 FcuTelemetryFresh (maintenance gate)
+    # agree on what "fresh" means. Previously a 7–10 s stale drone_state
+    # passed entry but tripped G1 on the very next tick.
     "staleness_windows_s": {
         "signal_report": 2.0,
-        "drone_state":  10.0,  # SITL: PX4 source timestamp ages 4-5s in OFFBOARD mode
+        "drone_state":   6.0,
     },
+
+    # Leader-position freshness guard for BandSensorNode (SESSION_LOG 2026-09-30).
+    "leader_position_max_age_s": 10.0,
 
     # ── Link state hysteresis ─────────────────────────────────────────────────
-
-    "link_thresholds": {
-        "good_above":      0.8,
-        "degrading_below": 0.7,
-        "poor_below":      0.5,
-        "lost_below":      0.2,
-    },
-    "down_threshold_s": 15,
-    "up_threshold_s":   30,
+    # SESSION_LOG 2026-10-07: the `link_thresholds` dict and the `down_threshold_s`
+    # / `up_threshold_s` keys were defined here but had no consumer in the live
+    # pipeline. Removed. The two thresholds that ARE live: _GC_QUALITY_TRIGGER
+    # (0.5, in relay_decision_authority.py; env override GC_QUALITY_TRIGGER)
+    # and relay_exit_quality_threshold (above). gc_link_observer.py normalises
+    # SNR to [0, 1] with 0.5 at LINK_MARGINAL_QUALITY.
 
     # ── §3.2 New resolved values ──────────────────────────────────────────────
     #
@@ -313,11 +322,15 @@ DEMO_CONFIG = {
     # default one to another's value, never default to zero."
     # These are the config-side dials — signal_faker reads them at startup.
     "hop_severities": {
-        "gc_to_leader":           0.70,   # GC↔leader: degraded (eff_range=464m, SNR≈-3.8dB)
+        # Under radio_range_m=1500, jamming_severity_factor=0.6:
+        #   eff_range = radio_range * (1 - severity * factor)
+        #   severity 0.70 → eff_range = 870 m
+        #   severity 0.35 → eff_range = 1185 m
+        "gc_to_leader":           0.70,   # degraded link — direct GC↔leader
         "leader_to_gc":           0.70,   # symmetric
-        "gc_to_follower":         0.35,   # GC↔follower: light jamming — all hops degraded
+        "gc_to_follower":         0.35,   # follower hops lightly jammed
         "follower_to_gc":         0.35,   # symmetric
-        "leader_to_follower":     0.35,   # relay hop: jammed but SNR ~16dB at 450m — G7 passes
+        "leader_to_follower":     0.35,   # relay hop
     },
 
     # ── Signal normalisation ──────────────────────────────────────────────────

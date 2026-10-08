@@ -1,5 +1,7 @@
 # Inline Annotation Reference
 
+> **Historical document.** This file catalogues annotations from the waves 0–9 build. Some entries describe superseded behaviour (ARBITER_SCAN terminal was `AlwaysSucceed`, `relay_completed` published a reauth_request, `signal_report` subscriptions, REPOSITION_RELAY, etc.). For the current pipeline, see [`docs/CURRENT_DESIGN.md`](docs/CURRENT_DESIGN.md). Individual entries here remain accurate for the lines they cite but may describe methods or paths that have since changed.
+
 Every non-obvious line in the build has an explanatory comment above it in the source file.
 This document catalogues those annotations by wave, so a reader can find the WHY behind any decision without session context.
 

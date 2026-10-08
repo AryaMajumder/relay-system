@@ -4,10 +4,9 @@ A follower drone that autonomously positions itself between a leader drone and g
 
 ## Status
 
-- **345 / 345 unit tests passing** (`pytest tests/`, ~30 s), across 18 test files.
-- **Two-drone SITL end-to-end observed** over a **25-minute manual run** across 5 leader positions (see the influence table below). No RTL flare, no OFFBOARD-lost cascades, no manual intervention. Not covered by automated tests.
-- **Band-infeasibility exit path observed once in manual SITL testing (2026-09-15)**: leader pushed to 2,913 m from GC, follower `OFFBOARD → HOLD` transition seen 2:34 after the feasibility crossover. `BandSensorNode` (the node that writes `band_fillable`) has no unit tests; the specific geometry is not covered by automated tests.
-- ~7,640 LoC across 28 Python modules. Layered along dependency order (waves 0–9).
+- **386 / 386 unit tests passing** (`pytest tests/`, ~11 s). Authoritative design reference: [`docs/CURRENT_DESIGN.md`](docs/CURRENT_DESIGN.md), written from the code.
+- **Two-drone SITL end-to-end observed** across multiple sessions in Oct 2026: follower reaches RELAYING, gate 8 drives reauth as the leader moves, the incumbent bid tracks the band center, no EXIT_RELAY on sideways leader shifts. Not covered by automated tests end-to-end.
+- **Band-infeasibility exit path observed once in manual SITL testing (2026-09-15)**: leader pushed to 2,913 m from GC, follower `OFFBOARD → HOLD`.
 
 ## Architecture
 
@@ -28,10 +27,12 @@ The follower's behaviour tree has two families of exit gates, and the difference
 | **G5** `RfLinkTelemetryFresh` | ARBITER_SCAN | RF telemetry stale | `ProposeExitRelay` | **HOLD in place** |
 | **G6** `RelayStillNeeded` | ARBITER_SCAN | direct link recovered | `ProposeExitRelay` | **HOLD in place** |
 | **G7** `RelayLinkAdequate` | ARBITER_SCAN | relay hops degraded for 3 ticks | `ProposeExitRelay` | **HOLD in place** |
-| **G8** `RelayActuallyImproved` | DIAG_SCAN | auth stale / relay not improving | writes `reauth_requested_at` | **advisory — never exits** |
+| **G8** `RelayActuallyImproved` | DIAG_SCAN | authorized point drifted outside `min(tolerance_radius_m, band_width_m/2)` OR auth timer expired | writes `reauth_requested_at` → capability_assessor publishes `reauth_request` | **re-authorization requested** (not an exit) |
 | **G9** `GpsHealthy` | DIAG_SCAN | GPS degraded | GPS alert published | **advisory — never exits** |
 
-G1–G3 are **safety gates** — the drone is physically compromised, get it home. G4–G7 are **viability gates** — the drone is healthy but the *relay task* is no longer useful or reachable; hold in place at the last valid position and let the pipeline re-engage if conditions recover. G8–G9 are **diagnostic gates** — they run unconditionally every tick in a separate `DIAG_SCAN` step before `ARBITER_SCAN`, so a G1–G7 alarm never suppresses them. Neither G8 nor G9 can exit the relay; their outputs are advisory signals to the GC.
+G1–G3 are **safety gates** — the drone is physically compromised, get it home. (G1's RTL is suppressed when `lost_fc_intent` is latched, since PX4's own failsafe owns the airframe; `alert_intent` is written in all cases.) G4–G7 are **viability gates** — the drone is healthy but the *relay task* is no longer useful or reachable; hold in place at the last valid position and let the pipeline re-engage if conditions recover. G8 and G9 run unconditionally every tick in a separate `DIAG_SCAN` step before `ARBITER_SCAN`, so a G1–G7 alarm never suppresses them. G8 triggers re-authorization (not an exit); G9 publishes a GPS advisory.
+
+**RELAYING-branch terminal.** When all G1–G7 pass, `ProposeIncumbentContinuousRelay` writes a `CONTINUOUS_RELAY` proposal for the live `bb["R_target"]` (band center computed each tick by `BandSensorNode`) so the next reauth round can renew the incumbent for the shifted target. Previously the terminal was `AlwaysSucceed` and incumbents lost their slot on every reauth round.
 
 ## Demonstrated behaviour
 
@@ -53,7 +54,7 @@ The `follower d_GC / leader d_GC` ratio ranged 0.53–0.97. As the leader moves 
 
 ### Band-infeasibility handling
 
-Leader pushed to (47.41000, 8.56500), **2,913 m from GC**. At severity 0.7 with `radio_range_m=1500`, the follower's per-hop reach `r_G + r_L ≈ 1,740 m` — any greater and no relay position satisfies both hops. G4 fired on the `band_fillable=False` path (geometric infeasibility); the geofence path was not exercised (`geofence_polygon` is unset in the current config — see `KNOWN_LIMITATIONS.md`).
+Leader pushed to (47.41000, 8.56500), **2,913 m from GC**. The exact band-math numbers from that session's config are superseded; the authoritative live-config computation is in `docs/CURRENT_DESIGN.md` ("Band math"). The qualitative outcome stands: G4 fired on the `band_fillable=False` path (geometric infeasibility); the geofence path was not exercised.
 
 - **T+0:00** — leader crossed feasibility limit at d_GC = 1,753 m. Follower still OFFBOARD, unchanged.
 - **T+2:34** — follower flight_mode: `OFFBOARD → HOLD`. Setpoint stream stopped. Drone held in place at its last valid relay position.
@@ -154,10 +155,10 @@ The effective G8 tolerance is `min(tolerance_radius_m, band_width_m / 2)` — th
 
 See [`KNOWN_LIMITATIONS.md`](KNOWN_LIMITATIONS.md) for the full inventory. Short version:
 
-- No GC-side software. The "GC" that authorizes proposals is a local stub that auto-authorizes everything.
-- No end-to-end pytest. The 25-minute run and the infeasibility test were executed by hand against SITL; all 345 passing tests are unit-level.
-- Multi-drone chain relay is a stub. `CHAIN_RELAY` flows through the pipeline; `chain_assigner` assigns a single target. Peer discovery, slot assignment, handoff sequencing between multiple followers do not exist.
-- Geofence polygon absent from config. `relay_decision_authority` calls `_point_in_polygon()` if `geofence_polygon` is set. It isn't. Spatial constraint validation silently passes.
+- No cloud GC-side software. `relay_decision_authority` runs entirely local-process, in-memory; there is no fleet-level policy service or human-in-the-loop review.
+- No end-to-end pytest. SITL observations are manual; all 386 passing tests are unit / BT-logic level.
+- Multi-drone chain relay is a stub. `CHAIN_RELAY` flows through the pipeline; `chain_assigner` assigns a single target.
+- Geofence polygon IS defined in `config/demo_config.py` (4-vertex box). `GeofenceContainsRelayPos` (entry) and `PositionServiceable`/G4 call `point_in_polygon` against it.
 - Symmetric re-engagement was observed but not measured. Exact timing for feasible-again → OFFBOARD was not captured because logging was not running during that transition.
 - All flight is in simulation (PX4 SITL + jMAVSim). No hardware-in-the-loop, no physical drones.
 
@@ -174,12 +175,13 @@ See [`KNOWN_LIMITATIONS.md`](KNOWN_LIMITATIONS.md) for the full inventory. Short
 ## Repository layout
 
 ```
-drone_control/                  # 22 top-level modules
+drone_control/                  # ROS 2 nodes + BT
   relay_bt/                     # behaviour tree — blackboard, geometry, condition/action nodes, tree_builder
   config/                       # demo_config.py — the entire config surface
-tests/                          # 18 test files, 345 test cases (all passing)
+tests/                          # 386 test cases (all passing)
 launch/                         # ROS 2 launch files
 docs/
-  architecture.md               # full Mermaid flow diagram + design invariants
+  CURRENT_DESIGN.md             # authoritative design reference, written from the code
+  architecture.md               # Mermaid flow diagram + design invariants (older, see CURRENT_DESIGN first)
 KNOWN_LIMITATIONS.md            # honest inventory of what is not built and not tested
 ```
